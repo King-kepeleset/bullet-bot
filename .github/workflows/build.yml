@@ -30,67 +30,40 @@ jobs:
       packages: write
 
     steps:
-      # ==================== NOTIFY START ====================
-      - name: 🔔 Notify Build Start
-        run: |
-          echo "⏳ Build dimulai untuk tag: ${{ inputs.tag }}"
-          echo "📦 Mode: ${{ inputs.build_mode }}"
-          echo "📥 Release URL: ${{ inputs.release_url }}"
-
-      # ==================== CHECKOUT ====================
-      - name: 📥 Checkout Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ==================== SETUP FLUTTER ====================
-      - name: 🔧 Setup Flutter SDK
+      - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.16.9'
           channel: 'stable'
-          cache: true
 
-      - name: 📦 Flutter Doctor
-        run: flutter doctor -v
-
-      # ==================== SETUP JAVA ====================
-      - name: ☕ Setup Java JDK 17
+      - name: Setup Java JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # ==================== DOWNLOAD PROJECT ====================
-      - name: 📥 Download Project ZIP
+      - name: Download Project ZIP
         run: |
-          echo "📥 Downloading from: ${{ inputs.release_url }}"
+          echo "Downloading from: ${{ inputs.release_url }}"
           curl -L -o project.zip "${{ inputs.release_url }}"
           unzip -q project.zip -d project/
-          echo "📂 Project files:"
-          ls -la project/
 
-      # ==================== CHECK PROJECT ====================
-      - name: 🔍 Check Project Structure
+      - name: Check Project Structure
         run: |
-          echo "📂 Checking project structure..."
+          echo "Checking project structure..."
           if [ -f "project/pubspec.yaml" ]; then
             echo "✅ pubspec.yaml found"
-            cat project/pubspec.yaml | head -20
           else
-            echo "⚠️ pubspec.yaml not found in root, checking subdirectories..."
+            echo "⚠️ pubspec.yaml not found"
             find project -name "pubspec.yaml" -type f | head -5
           fi
-          
-          if [ -f "project/android/app/build.gradle" ]; then
-            echo "✅ android/app/build.gradle found"
-          else
-            echo "⚠️ android/app/build.gradle not found"
-          fi
 
-      # ==================== SETUP GRADLE ====================
-      - name: 🔧 Setup Gradle Wrapper
+      - name: Setup Gradle Wrapper
         run: |
           if [ ! -f "project/android/gradlew" ]; then
-            echo "⚠️ gradlew not found, creating..."
             cd project/android
             curl -L -o gradle/wrapper/gradle-wrapper.jar \
               "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
@@ -100,27 +73,21 @@ jobs:
             chmod +x project/android/gradlew
           fi
 
-      # ==================== FLUTTER GET ====================
-      - name: 📦 Flutter Pub Get
+      - name: Flutter Pub Get
         run: |
           cd project
           flutter pub get
-          echo "✅ Flutter dependencies installed"
 
-      # ==================== BUILD APK ====================
-      - name: 🔨 Build APK
+      - name: Build APK
         run: |
           cd project
-          echo "🔨 Building ${{ inputs.build_mode }} APK..."
           if [ "${{ inputs.build_mode }}" = "release" ]; then
             flutter build apk --release --no-tree-shake-icons
           else
             flutter build apk --debug --no-tree-shake-icons
           fi
-          echo "✅ Build completed!"
 
-      # ==================== COLLECT APK ====================
-      - name: 📦 Collect APK
+      - name: Collect APK
         run: |
           mkdir -p output
           APK_DIR="project/build/app/outputs/apk"
@@ -133,95 +100,15 @@ jobs:
           if [ -f "$APK_PATH" ]; then
             cp "$APK_PATH" "output/app-${{ inputs.tag }}.apk"
             echo "✅ APK saved: app-${{ inputs.tag }}.apk"
-            ls -la output/
           else
-            echo "❌ APK not found at expected path: $APK_PATH"
-            echo "📂 Searching for APK files..."
+            echo "❌ APK not found"
             find project -name "*.apk" -type f 2>/dev/null || echo "No APK found"
             exit 1
           fi
 
-      # ==================== UPLOAD ARTIFACT ====================
-      - name: 📤 Upload APK Artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-${{ inputs.tag }}
           path: output/*.apk
           retention-days: 7
-
-      # ==================== NOTIFY SUCCESS ====================
-      - name: ✅ Notify Success
-        run: |
-          echo "🎉 Build successful for tag: ${{ inputs.tag }}"
-          echo "📦 APK available in artifacts"
-
-      # ==================== NOTIFY FAILURE ====================
-      - name: ❌ Notify Failure
-        if: failure()
-        run: |
-          echo "❌ Build failed for tag: ${{ inputs.tag }}"
-          echo "🔗 Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"            sed -i "s|android:label=\"[^\"]*\"|android:label=\"${{ inputs.app_name }}\"|g" "$MANIFEST"
-          fi
-
-      - name: Patch build.gradle
-        run: |
-          GRADLE="android/app/build.gradle"
-          if [ -f "$GRADLE" ]; then
-            sed -i "s|applicationId \"[^\"]*\"|applicationId \"${{ inputs.package_name }}\"|" "$GRADLE"
-            sed -i "s|versionCode [0-9]*|versionCode ${{ inputs.version_code }}|" "$GRADLE"
-            sed -i "s|versionName \"[^\"]*\"|versionName \"${{ inputs.version_name }}\"|" "$GRADLE"
-          fi
-
-      - name: Patch strings.xml
-        run: |
-          STRINGS="android/app/src/main/res/values/strings.xml"
-          if [ -f "$STRINGS" ]; then
-            sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${{ inputs.app_name }}</string>|g" "$STRINGS"
-          fi
-
-      - name: Setup Gradle Wrapper
-        run: |
-          curl -L -o android/gradle/wrapper/gradle-wrapper.jar \
-            "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
-          chmod +x android/gradlew
-
-      - name: Build APK
-        run: |
-          cd android
-          if [ "${{ inputs.build_type }}" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon
-          else
-            ./gradlew assembleDebug --no-daemon
-          fi
-
-      - name: Rename APK
-        run: |
-          mkdir -p output
-          if [ "${{ inputs.build_type }}" = "release" ]; then
-            APK_SRC="android/app/build/outputs/apk/release"
-          else
-            APK_SRC="android/app/build/outputs/apk/debug"
-          fi
-          find "$APK_SRC" -name "*.apk" | head -1 | xargs -I{} cp {} output/${{ inputs.app_name }}_v${{ inputs.version_name }}_${{ inputs.build_type }}.apk
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.app_name }}-v${{ inputs.version_name }}-${{ inputs.build_type }}
-          path: output/*.apk
-          retention-days: 30
-
-      - name: Send APK to Telegram
-        run: |
-          APK=$(find output -name "*.apk" | head -1)
-          SIZE=$(du -sh "$APK" | cut -f1)
-          curl -s -X POST "https://api.telegram.org/bot${{ inputs.bot_token }}/sendDocument" \
-            -F chat_id="${{ inputs.chat_id }}" \
-            -F document=@"$APK" \
-            -F parse_mode="HTML" \
-            -F caption="✅ <b>Build Selesai!</b>%0A%0A🏷️ <b>App:</b> ${{ inputs.app_name }}%0A📦 <b>Package:</b> <code>${{ inputs.package_name }}</code>%0A🔢 <b>Versi:</b> <code>${{ inputs.version_name }}</code> (code: ${{ inputs.version_code }})%0A🔨 <b>Tipe:</b> <code>${{ inputs.build_type }}</code>%0A📁 <b>Size:</b> <code>$SIZE</code>%0A%0A⚡ by @Zyvarno1"
-
-      - name: Notify Failure
-        if: failure()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{
