@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_url:
-        description: 'Release URL (link ke zip file)'
+        description: 'Direct Download URL (link ke ZIP file)'
         required: true
         type: string
       tag:
@@ -30,40 +30,78 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout Repository
+      - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Flutter SDK
+      - name: 🔧 Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.16.9'
           channel: 'stable'
+          cache: true
 
-      - name: Setup Java JDK 17
+      - name: 📦 Flutter Doctor
+        run: flutter doctor -v
+
+      - name: ☕ Setup Java JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Download Project ZIP
+      - name: 📥 Download Project ZIP
         run: |
-          echo "Downloading from: ${{ inputs.release_url }}"
-          curl -L -o project.zip "${{ inputs.release_url }}"
+          echo "📥 Downloading from: ${{ inputs.release_url }}"
+          
+          # Download dengan retry 3x
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+            curl -L -o project.zip "${{ inputs.release_url }}"
+            
+            if [ -f "project.zip" ] && [ -s "project.zip" ]; then
+              echo "✅ Download successful! Size: $(du -h project.zip | cut -f1)"
+              break
+            fi
+            
+            echo "⚠️ Download failed, retrying in 3 seconds..."
+            sleep 3
+          done
+          
+          if [ ! -f "project.zip" ] || [ ! -s "project.zip" ]; then
+            echo "❌ Failed to download project.zip after 3 attempts"
+            exit 1
+          fi
+          
+          echo "📂 Extracting ZIP..."
           unzip -q project.zip -d project/
+          
+          echo "📂 Project files:"
+          ls -la project/
 
-      - name: Check Project Structure
+      - name: 🔍 Check Project Structure
         run: |
-          echo "Checking project structure..."
+          echo "📂 Checking project structure..."
+          
           if [ -f "project/pubspec.yaml" ]; then
             echo "✅ pubspec.yaml found"
+            cat project/pubspec.yaml | head -20
           else
-            echo "⚠️ pubspec.yaml not found"
+            echo "⚠️ pubspec.yaml not found in root, searching..."
             find project -name "pubspec.yaml" -type f | head -5
+            echo "❌ pubspec.yaml not found, exiting..."
+            exit 1
+          fi
+          
+          if [ -f "project/android/app/build.gradle" ]; then
+            echo "✅ android/app/build.gradle found"
+          else
+            echo "⚠️ android/app/build.gradle not found"
           fi
 
-      - name: Setup Gradle Wrapper
+      - name: 🔧 Setup Gradle Wrapper
         run: |
           if [ ! -f "project/android/gradlew" ]; then
+            echo "⚠️ gradlew not found, creating..."
             cd project/android
             curl -L -o gradle/wrapper/gradle-wrapper.jar \
               "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
@@ -73,21 +111,24 @@ jobs:
             chmod +x project/android/gradlew
           fi
 
-      - name: Flutter Pub Get
+      - name: 📦 Flutter Pub Get
         run: |
           cd project
           flutter pub get
+          echo "✅ Flutter dependencies installed"
 
-      - name: Build APK
+      - name: 🔨 Build APK
         run: |
           cd project
+          echo "🔨 Building ${{ inputs.build_mode }} APK..."
           if [ "${{ inputs.build_mode }}" = "release" ]; then
             flutter build apk --release --no-tree-shake-icons
           else
             flutter build apk --debug --no-tree-shake-icons
           fi
+          echo "✅ Build completed!"
 
-      - name: Collect APK
+      - name: 📦 Collect APK
         run: |
           mkdir -p output
           APK_DIR="project/build/app/outputs/apk"
@@ -100,15 +141,28 @@ jobs:
           if [ -f "$APK_PATH" ]; then
             cp "$APK_PATH" "output/app-${{ inputs.tag }}.apk"
             echo "✅ APK saved: app-${{ inputs.tag }}.apk"
+            ls -la output/
           else
-            echo "❌ APK not found"
+            echo "❌ APK not found at expected path: $APK_PATH"
+            echo "📂 Searching for APK files..."
             find project -name "*.apk" -type f 2>/dev/null || echo "No APK found"
             exit 1
           fi
 
-      - name: Upload APK Artifact
+      - name: 📤 Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-${{ inputs.tag }}
           path: output/*.apk
           retention-days: 7
+
+      - name: ✅ Notify Success
+        run: |
+          echo "🎉 Build successful for tag: ${{ inputs.tag }}"
+          echo "📦 APK available in artifacts"
+
+      - name: ❌ Notify Failure
+        if: failure()
+        run: |
+          echo "❌ Build failed for tag: ${{ inputs.tag }}"
+          echo "🔗 Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
