@@ -1,18 +1,18 @@
-name: Build APK
+name: 🚀 Build APK - Flutter & Web2APK
 
 on:
   workflow_dispatch:
     inputs:
       release_url:
-        description: 'Download URL (ZIP file)'
+        description: '📥 Download URL (ZIP file)'
         required: true
         type: string
       tag:
-        description: 'Build Tag'
+        description: '🏷️ Build Tag'
         required: true
         type: string
       build_type:
-        description: 'Build Type'
+        description: '📱 Build Type'
         required: true
         default: 'flutter'
         type: choice
@@ -20,12 +20,12 @@ on:
           - flutter
           - web2apk
       app_name:
-        description: 'App Name'
+        description: '📱 App Name'
         required: false
         default: 'MyApp'
         type: string
       url:
-        description: 'Website URL (for web2apk)'
+        description: '🌐 Website URL (for web2apk)'
         required: false
         default: 'https://example.com'
         type: string
@@ -35,6 +35,7 @@ env:
 
 jobs:
   build:
+    name: 🔨 Build APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -43,19 +44,41 @@ jobs:
       packages: write
 
     steps:
+      # ============================================================
+      # STEP 1: CHECKOUT
+      # ============================================================
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 🔧 Set up JDK 17
+      # ============================================================
+      # STEP 2: SETUP FLUTTER
+      # ============================================================
+      - name: 🔧 Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Flutter Doctor
+        run: flutter doctor -v
+
+      # ============================================================
+      # STEP 3: SETUP JAVA & ANDROID
+      # ============================================================
+      - name: ☕ Setup Java JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 🔧 Set up Android SDK
+      - name: 🔧 Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: 📦 Install dependencies
+      # ============================================================
+      # STEP 4: INSTALL DEPENDENCIES
+      # ============================================================
+      - name: 📦 Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick jq unzip curl wget
@@ -68,522 +91,299 @@ jobs:
           sdk use gradle 8.9
           gradle --version
 
-      - name: 📥 Download Project ZIP (1x attempt, MUST SUCCEED)
+      # ============================================================
+      # STEP 5: DOWNLOAD PROJECT ZIP
+      # ============================================================
+      - name: 📥 Download Project ZIP
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📥 Downloading from: ${{ inputs.release_url }}"
-          echo "🔍 Testing URL..."
-          curl -I -L "${{ inputs.release_url }}" 2>&1 | head -15
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          echo ""
-          echo "⬇️ Downloading project.zip..."
-          wget --timeout=60 --progress=dot:giga -O project.zip "${{ inputs.release_url }}"
+          # Test URL first
+          echo "🔍 Testing URL..."
+          curl -I -L "${{ inputs.release_url }}" 2>&1 | head -10 || true
+          
+          # Download with retry
+          for i in 1 2 3 4 5; do
+            echo ""
+            echo "⬇️ Attempt $i/5..."
+            curl -L --connect-timeout 60 --max-time 180 -o project.zip "${{ inputs.release_url }}" || true
+            
+            if [ -f "project.zip" ] && [ -s "project.zip" ]; then
+              FILE_SIZE=$(du -h project.zip | cut -f1)
+              echo "✅ Download successful! Size: $FILE_SIZE"
+              break
+            fi
+            
+            echo "⚠️ Download failed, retrying in 5 seconds..."
+            sleep 5
+          done
           
           if [ ! -f "project.zip" ] || [ ! -s "project.zip" ]; then
-            echo "❌ Failed to download project.zip"
+            echo "❌ Failed to download project.zip after 5 attempts"
             echo "📂 Current directory contents:"
             ls -la
             exit 1
           fi
-          
-          echo "✅ Download successful! Size: $(du -h project.zip | cut -f1)"
 
-      - name: 📂 Extract Project
+      # ============================================================
+      # STEP 6: EXTRACT PROJECT
+      # ============================================================
+      - name: 📂 Extract Project ZIP
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📂 Extracting project.zip..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
           unzip -q project.zip -d project/
+          
+          # 🔥 FIX: Jika zip berisi 1 folder utama, ratakan isinya
+          FIRST_DIR=$(find project -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          ROOT_FILES=$(find project -mindepth 1 -maxdepth 1 | wc -l)
+          
+          if [ "$ROOT_FILES" = "1" ] && [ -n "$FIRST_DIR" ] && [ -f "$FIRST_DIR/pubspec.yaml" ]; then
+            echo "📂 Detected single root folder, flattening structure..."
+            TMP_DIR=$(mktemp -d)
+            cp -R "$FIRST_DIR"/. "$TMP_DIR"/
+            rm -rf project
+            mkdir -p project
+            cp -R "$TMP_DIR"/. project/
+            rm -rf "$TMP_DIR"
+          fi
+          
+          echo ""
           echo "📂 Project files:"
           ls -la project/
+
+      # ============================================================
+      # STEP 7: DETECT PROJECT TYPE
+      # ============================================================
+      - name: 🔍 Detect Project Type
+        id: detect
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Detecting project type..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Cek tipe project
           if [ -f "project/pubspec.yaml" ]; then
-            echo "✅ Flutter project detected (pubspec.yaml found)"
-            echo "PROJECT_TYPE=flutter" >> $GITHUB_ENV
+            echo "✅ pubspec.yaml found → Flutter project"
+            echo "project_type=flutter" >> $GITHUB_OUTPUT
+            echo "type=flutter" >> $GITHUB_ENV
           elif [ -f "project/build-config.json" ] || [ -f "project/web_config.json" ]; then
-            echo "✅ Web2APK project detected"
-            echo "PROJECT_TYPE=web2apk" >> $GITHUB_ENV
+            echo "✅ build-config.json/web_config.json found → Web2APK project"
+            echo "project_type=web2apk" >> $GITHUB_OUTPUT
+            echo "type=web2apk" >> $GITHUB_ENV
           else
-            echo "❌ Unknown project type - no pubspec.yaml or build-config.json found"
+            echo "⚠️ No pubspec.yaml found, using input build_type"
+            echo "project_type=${{ inputs.build_type }}" >> $GITHUB_OUTPUT
+            echo "type=${{ inputs.build_type }}" >> $GITHUB_ENV
+          fi
+          
+          echo "📱 Project Type: ${{ env.type }}"
+
+      # ============================================================
+      # STEP 8: CHECK PROJECT STRUCTURE
+      # ============================================================
+      - name: 🔍 Check Project Structure
+        if: env.type == 'flutter'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Checking Flutter project structure..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ ! -f "project/pubspec.yaml" ]; then
+            echo "❌ pubspec.yaml not found!"
+            echo "📂 Searching for pubspec.yaml..."
+            find project -name "pubspec.yaml" -type f | head -5
             exit 1
           fi
+          
+          echo "✅ pubspec.yaml found"
+          echo ""
+          echo "📄 pubspec.yaml content:"
+          cat project/pubspec.yaml | head -30
 
-      - name: 🔍 Read Build Config
-        id: config
+      # ============================================================
+      # STEP 9: AUTO-FIX PUBSPEC.YAML
+      # ============================================================
+      - name: 🔧 Auto-Fix pubspec.yaml
+        if: env.type == 'flutter'
         run: |
-          if [ -f "project/build-config.json" ]; then
-            echo "type=$(jq -r .type project/build-config.json)" >> $GITHUB_ENV
-            echo "url=$(jq -r .url project/build-config.json)" >> $GITHUB_ENV
-            echo "app_name=$(jq -r .app_name project/build-config.json)" >> $GITHUB_ENV
-            echo "build_type=$(jq -r .build_type project/build-config.json)" >> $GITHUB_ENV
-            cat project/build-config.json
-          elif [ -f "project/web_config.json" ]; then
-            echo "type=web2apk" >> $GITHUB_ENV
-            echo "url=$(jq -r .url project/web_config.json)" >> $GITHUB_ENV
-            echo "app_name=$(jq -r .apkName project/web_config.json)" >> $GITHUB_ENV
-            cat project/web_config.json
-          else
-            echo "type=${{ inputs.build_type }}" >> $GITHUB_ENV
-            echo "url=${{ inputs.url }}" >> $GITHUB_ENV
-            echo "app_name=${{ inputs.app_name }}" >> $GITHUB_ENV
-          fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔧 Auto-fixing pubspec.yaml..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          echo "Type: ${{ env.type }}"
-          echo "App Name: ${{ env.app_name }}"
-          echo "URL: ${{ env.url }}"
-
-      # ============================================================
-      #  GENERATE KEYSTORE
-      # ============================================================
-      - name: 🔑 Generate Keystore
-        run: |
-          keytool -genkey -v -keystore release.keystore -alias release \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass password -keypass password \
-            -dname "CN=BuildBot, OU=Dev, O=BuildBot, L=City, S=State, C=ID"
-
-      # ============================================================
-      #  WEB2APK BUILD
-      # ============================================================
-      - name: 🌐 Web2APK - Build
-        if: env.type == 'web2apk'
-        run: |
-          echo "🌐 Building Web2APK..."
-          
-          URL="${{ env.url }}"
-          APP_NAME="${{ env.app_name }}"
-          
-          echo "URL: $URL"
-          echo "App Name: $APP_NAME"
-          
-          mkdir -p project/app/src/main/java/com/web2apk/app
-          mkdir -p project/app/src/main/res/layout
-          mkdir -p project/app/src/main/res/values
-          mkdir -p project/app/src/main/res/mipmap-hdpi
-          mkdir -p project/app/src/main/res/mipmap-mdpi
-          mkdir -p project/app/src/main/res/mipmap-xhdpi
-          mkdir -p project/app/src/main/res/mipmap-xxhdpi
-          mkdir -p project/app/src/main/res/mipmap-xxxhdpi
-
-          cat > project/build.gradle <<'EOF'
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.7.3'
-              }
-          }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          task clean(type: Delete) {
-              delete rootProject.buildDir
-          }
-          EOF
-
-          cat > project/settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "MyApp"
-          include ':app'
-          EOF
-
-          cat > project/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2048m
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
-
-          cat > project/app/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application'
-          }
-          android {
-              namespace 'com.web2apk.app'
-              compileSdk 34
-              defaultConfig {
-                  applicationId "com.web2apk.app"
-                  minSdk 21
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-              }
-              signingConfigs {
-                  debug {
-                      storeFile file("debug.keystore")
-                      storePassword "android"
-                      keyAlias "androiddebugkey"
-                      keyPassword "android"
-                  }
-                  release {
-                      storeFile file("debug.keystore")
-                      storePassword "android"
-                      keyAlias "androiddebugkey"
-                      keyPassword "android"
-                  }
-              }
-              buildTypes {
-                  debug { signingConfig signingConfigs.debug }
-                  release {
-                      signingConfig signingConfigs.release
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-              }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          dependencies {
-              implementation 'androidx.core:core-ktx:1.9.0'
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.8.0'
-              implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
-              implementation 'androidx.webkit:webkit:1.4.0'
-          }
-          EOF
-
-          cat > project/app/src/main/java/com/web2apk/app/MainActivity.java <<'EOF'
-          package com.web2apk.app;
-          
-          import android.annotation.SuppressLint;
-          import android.app.DownloadManager;
-          import android.content.Intent;
-          import android.net.Uri;
-          import android.os.Bundle;
-          import android.os.Environment;
-          import android.view.View;
-          import android.webkit.CookieManager;
-          import android.webkit.DownloadListener;
-          import android.webkit.WebChromeClient;
-          import android.webkit.WebResourceRequest;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import android.widget.ProgressBar;
-          
-          import androidx.appcompat.app.AppCompatActivity;
-          import androidx.appcompat.widget.Toolbar;
-          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-          
-          public class MainActivity extends AppCompatActivity {
-              private static final String WEBSITE_URL = "URL_PLACEHOLDER";
-              private WebView webView;
-              private ProgressBar progressBar;
-              private SwipeRefreshLayout swipeRefreshLayout;
-              
-              @SuppressLint("SetJavaScriptEnabled")
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  setContentView(R.layout.activity_main);
-                  
-                  webView = findViewById(R.id.webView);
-                  progressBar = findViewById(R.id.progressBar);
-                  swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
-                  
-                  Toolbar toolbar = findViewById(R.id.toolbar);
-                  setSupportActionBar(toolbar);
-                  if (getSupportActionBar() != null) {
-                      getSupportActionBar().setTitle(getString(R.string.app_name));
-                  }
-                  
-                  setupWebView();
-                  swipeRefreshLayout.setOnRefreshListener(() -> webView.reload());
-                  webView.loadUrl(WEBSITE_URL);
-              }
-              
-              @SuppressLint("SetJavaScriptEnabled")
-              private void setupWebView() {
-                  WebSettings settings = webView.getSettings();
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  settings.setDatabaseEnabled(true);
-                  settings.setMediaPlaybackRequiresUserGesture(false);
-                  settings.setAllowFileAccess(true);
-                  settings.setAllowContentAccess(true);
-                  settings.setUseWideViewPort(true);
-                  settings.setLoadWithOverviewMode(true);
-                  settings.setBuiltInZoomControls(false);
-                  settings.setDisplayZoomControls(false);
-                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-                  
-                  CookieManager cookieManager = CookieManager.getInstance();
-                  cookieManager.setAcceptCookie(true);
-                  cookieManager.setAcceptThirdPartyCookies(webView, true);
-                  
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public void onPageFinished(WebView view, String url) {
-                          progressBar.setVisibility(View.GONE);
-                          swipeRefreshLayout.setRefreshing(false);
-                      }
-                      
-                      @Override
-                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                          String url = request.getUrl().toString();
-                          if (url.startsWith("tel:") || url.startsWith("mailto:") || 
-                              url.startsWith("intent:") || url.startsWith("whatsapp:")) {
-                              try {
-                                  startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                              } catch (Exception ignored) {}
-                              return true;
-                          }
-                          return false;
-                      }
-                  });
-                  
-                  webView.setWebChromeClient(new WebChromeClient() {
-                      @Override
-                      public void onProgressChanged(WebView view, int progress) {
-                          progressBar.setProgress(progress);
-                          if (progress >= 100) {
-                              progressBar.setVisibility(View.GONE);
-                          } else {
-                              progressBar.setVisibility(View.VISIBLE);
-                          }
-                      }
-                  });
-                  
-                  webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
-                      DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                      request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                      request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, contentDisposition);
-                      DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-                      dm.enqueue(request);
-                  });
-                  
-                  webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-              }
-              
-              @Override
-              public void onBackPressed() {
-                  if (webView != null && webView.canGoBack()) {
-                      webView.goBack();
-                      return;
-                  }
-                  super.onBackPressed();
-              }
-              
-              @Override
-              protected void onResume() {
-                  if (webView != null) webView.onResume();
-              }
-              
-              @Override
-              protected void onPause() {
-                  if (webView != null) webView.onPause();
-                  super.onPause();
-              }
-              
-              @Override
-              protected void onDestroy() {
-                  if (webView != null) webView.destroy();
-                  super.onDestroy();
-              }
-          }
-          EOF
-
-          cat > project/app/src/main/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <application
-                  android:allowBackup="true"
-                  android:hardwareAccelerated="true"
-                  android:usesCleartextTraffic="true"
-                  android:icon="@mipmap/ic_launcher"
-                  android:roundIcon="@mipmap/ic_launcher_round"
-                  android:label="@string/app_name"
-                  android:theme="@style/AppTheme">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTop"
-                      android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          cat > project/app/src/main/res/layout/activity_main.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              xmlns:app="http://schemas.android.com/apk/res-auto"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:orientation="vertical">
-              <androidx.appcompat.widget.Toolbar
-                  android:id="@+id/toolbar"
-                  android:layout_width="match_parent"
-                  android:layout_height="56dp"
-                  android:background="#000000"
-                  app:titleTextColor="#FFFFFF"/>
-              <ProgressBar
-                  android:id="@+id/progressBar"
-                  style="?android:attr/progressBarStyleHorizontal"
-                  android:layout_width="match_parent"
-                  android:layout_height="4dp"
-                  android:max="100"/>
-              <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-                  android:id="@+id/swipeRefreshLayout"
-                  android:layout_width="match_parent"
-                  android:layout_height="match_parent">
-                  <WebView
-                      android:id="@+id/webView"
-                      android:layout_width="match_parent"
-                      android:layout_height="match_parent"/>
-              </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
-          </LinearLayout>
-          EOF
-
-          cat > project/app/src/main/res/values/strings.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">AppName</string>
-              <string name="loading">Loading...</string>
-          </resources>
-          EOF
-
-          cat > project/app/src/main/res/values/colors.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <color name="colorPrimary">#000000</color>
-              <color name="colorPrimaryDark">#000000</color>
-              <color name="colorAccent">#2196F3</color>
-              <color name="white">#FFFFFF</color>
-              <color name="black">#000000</color>
-          </resources>
-          EOF
-
-          cat > project/app/src/main/res/values/styles.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
-                  <item name="android:statusBarColor">#000000</item>
-                  <item name="android:navigationBarColor">#000000</item>
-                  <item name="android:windowLightStatusBar">false</item>
-              </style>
-          </resources>
-          EOF
-
-          sed -i "s|URL_PLACEHOLDER|$URL|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
-          sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">$APP_NAME</string>|g" project/app/src/main/res/values/strings.xml
-
-          if [ -f "project/icon.png" ]; then
-            echo "✅ Using project icon"
-            cp project/icon.png /tmp/icon.png
-          else
-            echo "⚠️ No icon found, creating default..."
-            convert -size 512x512 xc:#2196F3 /tmp/icon.png
-          fi
-
-          convert /tmp/icon.png -resize 72x72 project/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert /tmp/icon.png -resize 48x48 project/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          convert /tmp/icon.png -resize 96x96 project/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert /tmp/icon.png -resize 144x144 project/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert /tmp/icon.png -resize 192x192 project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          cp project/app/src/main/res/mipmap-hdpi/ic_launcher.png project/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-mdpi/ic_launcher.png project/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png project/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-xxhdpi/ic_launcher.png project/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png project/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-
-          rm -f project/app/debug.keystore
-          keytool -genkey -v -keystore project/app/debug.keystore \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug, O=Android, C=US"
-
           cd project
-          source "$HOME/.sdkman/bin/sdkman-init.sh"
-          gradle assembleRelease
+          
+          # Fix SDK constraint
+          if grep -q "sdk:" pubspec.yaml; then
+            echo "📝 Fixing SDK constraint..."
+            sed -i 's/sdk: ">=3.0.0 <4.0.0"/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
+            sed -i 's/sdk: ^3.[0-9].[0-9]/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
+            sed -i 's/sdk: ">=3.[0-9].[0-9] <4.0.0"/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
+          fi
+          
+          # Fix version constraints for common packages
+          echo "📝 Fixing package versions..."
+          sed -i 's/webview_flutter: ^[0-9]*\.[0-9]*\.[0-9]*/webview_flutter: ^4.13.0/g' pubspec.yaml
+          sed -i 's/geolocator: ^[0-9]*\.[0-9]*\.[0-9]*/geolocator: ^13.0.4/g' pubspec.yaml
+          sed -i 's/google_maps_flutter: ^[0-9]*\.[0-9]*\.[0-9]*/google_maps_flutter: ^2.9.0/g' pubspec.yaml
+          sed -i 's/permission_handler: ^[0-9]*\.[0-9]*\.[0-9]*/permission_handler: ^11.3.1/g' pubspec.yaml
+          sed -i 's/firebase_core: ^[0-9]*\.[0-9]*\.[0-9]*/firebase_core: ^2.32.0/g' pubspec.yaml
+          sed -i 's/file_picker: ^[0-9]*\.[0-9]*\.[0-9]*/file_picker: ^6.2.1/g' pubspec.yaml
+          sed -i 's/image_picker: ^[0-9]*\.[0-9]*\.[0-9]*/image_picker: ^1.1.2/g' pubspec.yaml
+          sed -i 's/flutter_local_notifications: ^[0-9]*\.[0-9]*\.[0-9]*/flutter_local_notifications: ^17.2.4/g' pubspec.yaml
+          sed -i 's/workmanager: ^[0-9]*\.[0-9]*\.[0-9]*/workmanager: ^0.5.2/g' pubspec.yaml
+          
+          echo "✅ pubspec.yaml auto-fixed"
+          echo ""
+          echo "📄 Fixed pubspec.yaml:"
+          cat pubspec.yaml | grep -E "sdk:|webview_flutter:|geolocator:|firebase_core:" || echo "⚠️ No matching dependencies found"
 
-          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ -f "$APK_PATH" ]; then
-            echo "✅ Signing APK..."
-            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -n1)/apksigner sign \
-              --ks ../release.keystore --ks-pass pass:password --key-pass pass:password "$APK_PATH"
+      # ============================================================
+      # STEP 10: SETUP GRADLE
+      # ============================================================
+      - name: 🔧 Setup Gradle Wrapper
+        if: env.type == 'flutter'
+        run: |
+          if [ ! -f "project/android/gradlew" ]; then
+            echo "⚠️ gradlew not found, creating..."
+            cd project/android
+            curl -L -o gradle/wrapper/gradle-wrapper.jar \
+              "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
+            chmod +x gradlew
+            cd ../..
+          else
+            chmod +x project/android/gradlew
           fi
 
       # ============================================================
-      #  FLUTTER BUILD
+      # STEP 11: FLUTTER PUB GET
       # ============================================================
-      - name: 🔧 Setup Flutter SDK
-        if: env.PROJECT_TYPE == 'flutter' || env.type == 'flutter'
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.27.0'
-          channel: 'stable'
-          cache: true
-
       - name: 📦 Flutter Pub Get
-        if: env.PROJECT_TYPE == 'flutter' || env.type == 'flutter'
+        if: env.type == 'flutter'
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Running flutter pub get..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
           cd project
+          
+          for i in 1 2 3; do
+            echo "Attempt $i/3..."
+            if flutter pub get; then
+              echo "✅ flutter pub get succeeded!"
+              break
+            fi
+            echo "⚠️ flutter pub get failed, retrying in 5 seconds..."
+            rm -rf pubspec.lock
+            sleep 5
+          done
+          
+          # Second attempt to ensure all dependencies
+          echo ""
+          echo "📦 Running flutter pub get again to ensure all dependencies..."
           flutter pub get
 
+      # ============================================================
+      # STEP 12: BUILD FLUTTER APK
+      # ============================================================
       - name: 🔨 Build Flutter APK
-        if: env.PROJECT_TYPE == 'flutter' || env.type == 'flutter'
+        if: env.type == 'flutter'
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔨 Building Flutter APK..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
           cd project
-          if [ "${{ inputs.build_type }}" = "release" ] || [ "${{ env.build_type }}" = "release" ]; then
-            flutter build apk --release
+          
+          if flutter build apk --release --no-tree-shake-icons; then
+            echo "✅ Build successful!"
           else
-            flutter build apk --debug
+            echo "⚠️ Build failed, trying with --no-sound-null-safety..."
+            flutter build apk --release --no-tree-shake-icons --no-sound-null-safety
           fi
 
-      - name: 🔑 Sign Flutter APK
-        if: (env.PROJECT_TYPE == 'flutter' || env.type == 'flutter') && (inputs.build_type == 'release' || env.build_type == 'release')
+      # ============================================================
+      # STEP 13: COLLECT APK
+      # ============================================================
+      - name: 📦 Collect APK
         run: |
-          APK_PATH=$(find project/build/app/outputs/flutter-apk -name "*.apk" | head -n 1)
-          if [ -f "$APK_PATH" ]; then
-            echo "✅ Signing Flutter APK..."
-            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -n1)/apksigner sign \
-              --ks release.keystore --ks-pass pass:password --key-pass pass:password "$APK_PATH"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Collecting APK..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          mkdir -p output
+          
+          # Cari APK di berbagai lokasi
+          APK_PATHS=(
+            "project/build/app/outputs/apk/release/app-release.apk"
+            "project/build/app/outputs/apk/debug/app-debug.apk"
+            "project/build/app/outputs/flutter-apk/app-release.apk"
+            "project/build/app/outputs/flutter-apk/app-debug.apk"
+            "project/app/build/outputs/apk/release/app-release.apk"
+            "project/app/build/outputs/apk/debug/app-debug.apk"
+          )
+          
+          FOUND=false
+          for APK_PATH in "${APK_PATHS[@]}"; do
+            if [ -f "$APK_PATH" ]; then
+              cp "$APK_PATH" "output/app-${{ inputs.tag }}.apk"
+              echo "✅ APK found at: $APK_PATH"
+              echo "✅ APK saved: app-${{ inputs.tag }}.apk"
+              FOUND=true
+              break
+            fi
+          done
+          
+          if [ "$FOUND" = false ]; then
+            echo "❌ APK not found!"
+            echo "📂 Searching for APK files..."
+            find . -name "*.apk" -type f 2>/dev/null || echo "No APK found"
+            exit 1
           fi
+          
+          echo ""
+          echo "📂 Output:"
+          ls -la output/
 
       # ============================================================
-      #  UPLOAD APK
+      # STEP 14: UPLOAD APK
       # ============================================================
-      - name: 📤 Upload APK
+      - name: 📤 Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-${{ inputs.tag }}
-          path: |
-            project/app/build/outputs/apk/release/*.apk
-            project/app/build/outputs/apk/debug/*.apk
-            project/build/app/outputs/flutter-apk/*.apk
+          path: output/*.apk
           retention-days: 7
-          if-no-files-found: error
 
+      # ============================================================
+      # STEP 15: NOTIFY SUCCESS
+      # ============================================================
       - name: ✅ Notify Success
         run: |
-          echo "🎉 Build successful for tag: ${{ inputs.tag }}"
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║                    🎉 BUILD SUCCESSFUL 🎉                      ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📱 App: ${{ inputs.app_name }}"
+          echo "🏷️ Tag: ${{ inputs.tag }}"
           echo "📦 APK available in artifacts"
+          echo "🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+      # ============================================================
+      # STEP 16: NOTIFY FAILURE
+      # ============================================================
       - name: ❌ Notify Failure
         if: failure()
         run: |
-          echo "❌ Build failed for tag: ${{ inputs.tag }}"
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║                    ❌ BUILD FAILED ❌                          ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📱 App: ${{ inputs.app_name }}"
+          echo "🏷️ Tag: ${{ inputs.tag }}"
           echo "🔗 Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
