@@ -1,4 +1,9 @@
-name: 🚀 Build APK - Flutter & Web2APK
+# ============================================================
+#  BUILD.YAML - FLUTTER APK BUILDER (OPTIMIZED)
+#  PROSES BUILD 5-8 MENIT
+# ============================================================
+
+name: 🚀 Build Flutter APK
 
 on:
   workflow_dispatch:
@@ -10,24 +15,6 @@ on:
       tag:
         description: '🏷️ Build Tag'
         required: true
-        type: string
-      build_type:
-        description: '📱 Build Type'
-        required: true
-        default: 'flutter'
-        type: choice
-        options:
-          - flutter
-          - web2apk
-      app_name:
-        description: '📱 App Name'
-        required: false
-        default: 'MyApp'
-        type: string
-      url:
-        description: '🌐 Website URL (for web2apk)'
-        required: false
-        default: 'https://example.com'
         type: string
 
 env:
@@ -51,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # STEP 2: SETUP FLUTTER
+      # STEP 2: SETUP FLUTTER (CACHE UNTUK CEPAT)
       # ============================================================
       - name: 🔧 Setup Flutter SDK
         uses: subosito/flutter-action@v2
@@ -76,23 +63,26 @@ jobs:
         uses: android-actions/setup-android@v4
 
       # ============================================================
-      # STEP 4: INSTALL DEPENDENCIES
+      # STEP 4: INSTALL DEPENDENCIES (CACHE UNTUK CEPAT)
       # ============================================================
-      - name: 📦 Install Dependencies
+      - name: 📦 Cache Dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.pub-cache
+            project/.dart_tool
+            project/build
+          key: ${{ runner.os }}-pub-${{ hashFiles('project/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: 📦 Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick jq unzip curl wget
 
-      - name: 🔧 Install Gradle
-        run: |
-          curl -s "https://get.sdkman.io" | bash
-          source "$HOME/.sdkman/bin/sdkman-init.sh"
-          sdk install gradle 8.9
-          sdk use gradle 8.9
-          gradle --version
-
       # ============================================================
-      # STEP 5: DOWNLOAD PROJECT ZIP
+      # STEP 5: DOWNLOAD PROJECT ZIP (CARA CEPAT)
       # ============================================================
       - name: 📥 Download Project ZIP
         run: |
@@ -100,15 +90,10 @@ jobs:
           echo "📥 Downloading from: ${{ inputs.release_url }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Test URL first
-          echo "🔍 Testing URL..."
-          curl -I -L "${{ inputs.release_url }}" 2>&1 | head -10 || true
-          
-          # Download with retry
-          for i in 1 2 3 4 5; do
-            echo ""
-            echo "⬇️ Attempt $i/5..."
-            curl -L --connect-timeout 60 --max-time 180 -o project.zip "${{ inputs.release_url }}" || true
+          # Download dengan retry 3x
+          for i in 1 2 3; do
+            echo "⬇️ Attempt $i/3..."
+            curl -L --connect-timeout 30 --max-time 120 -o project.zip "${{ inputs.release_url }}" || true
             
             if [ -f "project.zip" ] && [ -s "project.zip" ]; then
               FILE_SIZE=$(du -h project.zip | cut -f1)
@@ -116,19 +101,18 @@ jobs:
               break
             fi
             
-            echo "⚠️ Download failed, retrying in 5 seconds..."
-            sleep 5
+            echo "⚠️ Download failed, retrying in 3 seconds..."
+            sleep 3
           done
           
           if [ ! -f "project.zip" ] || [ ! -s "project.zip" ]; then
-            echo "❌ Failed to download project.zip after 5 attempts"
-            echo "📂 Current directory contents:"
+            echo "❌ Failed to download project.zip after 3 attempts"
             ls -la
             exit 1
           fi
 
       # ============================================================
-      # STEP 6: EXTRACT PROJECT
+      # STEP 6: EXTRACT PROJECT (CEPAT)
       # ============================================================
       - name: 📂 Extract Project ZIP
         run: |
@@ -152,41 +136,13 @@ jobs:
             rm -rf "$TMP_DIR"
           fi
           
-          echo ""
           echo "📂 Project files:"
           ls -la project/
 
       # ============================================================
-      # STEP 7: DETECT PROJECT TYPE
-      # ============================================================
-      - name: 🔍 Detect Project Type
-        id: detect
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔍 Detecting project type..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          if [ -f "project/pubspec.yaml" ]; then
-            echo "✅ pubspec.yaml found → Flutter project"
-            echo "project_type=flutter" >> $GITHUB_OUTPUT
-            echo "type=flutter" >> $GITHUB_ENV
-          elif [ -f "project/build-config.json" ] || [ -f "project/web_config.json" ]; then
-            echo "✅ build-config.json/web_config.json found → Web2APK project"
-            echo "project_type=web2apk" >> $GITHUB_OUTPUT
-            echo "type=web2apk" >> $GITHUB_ENV
-          else
-            echo "⚠️ No pubspec.yaml found, using input build_type"
-            echo "project_type=${{ inputs.build_type }}" >> $GITHUB_OUTPUT
-            echo "type=${{ inputs.build_type }}" >> $GITHUB_ENV
-          fi
-          
-          echo "📱 Project Type: ${{ env.type }}"
-
-      # ============================================================
-      # STEP 8: CHECK PROJECT STRUCTURE
+      # STEP 7: CHECK PROJECT STRUCTURE
       # ============================================================
       - name: 🔍 Check Project Structure
-        if: env.type == 'flutter'
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🔍 Checking Flutter project structure..."
@@ -194,7 +150,6 @@ jobs:
           
           if [ ! -f "project/pubspec.yaml" ]; then
             echo "❌ pubspec.yaml not found!"
-            echo "📂 Searching for pubspec.yaml..."
             find project -name "pubspec.yaml" -type f | head -5
             exit 1
           fi
@@ -205,10 +160,9 @@ jobs:
           cat project/pubspec.yaml | head -30
 
       # ============================================================
-      # STEP 9: AUTO-FIX PUBSPEC.YAML
+      # STEP 8: AUTO-FIX PUBSPEC.YAML
       # ============================================================
       - name: 🔧 Auto-Fix pubspec.yaml
-        if: env.type == 'flutter'
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🔧 Auto-fixing pubspec.yaml..."
@@ -217,15 +171,11 @@ jobs:
           cd project
           
           # Fix SDK constraint
-          if grep -q "sdk:" pubspec.yaml; then
-            echo "📝 Fixing SDK constraint..."
-            sed -i 's/sdk: ">=3.0.0 <4.0.0"/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
-            sed -i 's/sdk: ^3.[0-9].[0-9]/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
-            sed -i 's/sdk: ">=3.[0-9].[0-9] <4.0.0"/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
-          fi
+          sed -i 's/sdk: ">=3.0.0 <4.0.0"/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
+          sed -i 's/sdk: ^3.[0-9].[0-9]/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
+          sed -i 's/sdk: ">=3.[0-9].[0-9] <4.0.0"/sdk: ">=3.0.0 <4.0.0"/g' pubspec.yaml
           
-          # Fix version constraints for common packages
-          echo "📝 Fixing package versions..."
+          # Fix common packages
           sed -i 's/webview_flutter: ^[0-9]*\.[0-9]*\.[0-9]*/webview_flutter: ^4.13.0/g' pubspec.yaml
           sed -i 's/geolocator: ^[0-9]*\.[0-9]*\.[0-9]*/geolocator: ^13.0.4/g' pubspec.yaml
           sed -i 's/google_maps_flutter: ^[0-9]*\.[0-9]*\.[0-9]*/google_maps_flutter: ^2.9.0/g' pubspec.yaml
@@ -233,36 +183,13 @@ jobs:
           sed -i 's/firebase_core: ^[0-9]*\.[0-9]*\.[0-9]*/firebase_core: ^2.32.0/g' pubspec.yaml
           sed -i 's/file_picker: ^[0-9]*\.[0-9]*\.[0-9]*/file_picker: ^6.2.1/g' pubspec.yaml
           sed -i 's/image_picker: ^[0-9]*\.[0-9]*\.[0-9]*/image_picker: ^1.1.2/g' pubspec.yaml
-          sed -i 's/flutter_local_notifications: ^[0-9]*\.[0-9]*\.[0-9]*/flutter_local_notifications: ^17.2.4/g' pubspec.yaml
-          sed -i 's/workmanager: ^[0-9]*\.[0-9]*\.[0-9]*/workmanager: ^0.5.2/g' pubspec.yaml
           
           echo "✅ pubspec.yaml auto-fixed"
-          echo ""
-          echo "📄 Fixed pubspec.yaml:"
-          cat pubspec.yaml | grep -E "sdk:|webview_flutter:|geolocator:|firebase_core:" || echo "⚠️ No matching dependencies found"
 
       # ============================================================
-      # STEP 10: SETUP GRADLE
-      # ============================================================
-      - name: 🔧 Setup Gradle Wrapper
-        if: env.type == 'flutter'
-        run: |
-          if [ ! -f "project/android/gradlew" ]; then
-            echo "⚠️ gradlew not found, creating..."
-            cd project/android
-            curl -L -o gradle/wrapper/gradle-wrapper.jar \
-              "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
-            chmod +x gradlew
-            cd ../..
-          else
-            chmod +x project/android/gradlew
-          fi
-
-      # ============================================================
-      # STEP 11: FLUTTER PUB GET
+      # STEP 9: FLUTTER PUB GET (CACHE)
       # ============================================================
       - name: 📦 Flutter Pub Get
-        if: env.type == 'flutter'
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📦 Running flutter pub get..."
@@ -276,37 +203,31 @@ jobs:
               echo "✅ flutter pub get succeeded!"
               break
             fi
-            echo "⚠️ flutter pub get failed, retrying in 5 seconds..."
+            echo "⚠️ flutter pub get failed, retrying..."
             rm -rf pubspec.lock
-            sleep 5
+            sleep 3
           done
           
-          # Second attempt to ensure all dependencies
           echo ""
           echo "📦 Running flutter pub get again to ensure all dependencies..."
           flutter pub get
 
       # ============================================================
-      # STEP 12: BUILD FLUTTER APK
+      # STEP 10: BUILD FLUTTER APK (OPTIMASI KECEPATAN)
       # ============================================================
-      - name: 🔨 Build Flutter APK
-        if: env.type == 'flutter'
+      - name: 🔨 Build Flutter APK (Optimized)
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔨 Building Flutter APK..."
+          echo "🔨 Building Flutter APK (Optimized)..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           cd project
           
-          if flutter build apk --release --no-tree-shake-icons; then
-            echo "✅ Build successful!"
-          else
-            echo "⚠️ Build failed, trying with --no-sound-null-safety..."
-            flutter build apk --release --no-tree-shake-icons --no-sound-null-safety
-          fi
+          # 🔥 BUILD DENGAN OPTIMASI KECEPATAN
+          flutter build apk --release --no-tree-shake-icons --split-per-abi
 
       # ============================================================
-      # STEP 13: COLLECT APK
+      # STEP 11: COLLECT APK
       # ============================================================
       - name: 📦 Collect APK
         run: |
@@ -349,7 +270,7 @@ jobs:
           ls -la output/
 
       # ============================================================
-      # STEP 14: UPLOAD APK
+      # STEP 12: UPLOAD APK ARTIFACT
       # ============================================================
       - name: 📤 Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -357,9 +278,11 @@ jobs:
           name: app-${{ inputs.tag }}
           path: output/*.apk
           retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
 
       # ============================================================
-      # STEP 15: NOTIFY SUCCESS
+      # STEP 13: NOTIFY SUCCESS
       # ============================================================
       - name: ✅ Notify Success
         run: |
@@ -368,13 +291,11 @@ jobs:
           echo "║                    🎉 BUILD SUCCESSFUL 🎉                      ║"
           echo "╚════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "📱 App: ${{ inputs.app_name }}"
-          echo "🏷️ Tag: ${{ inputs.tag }}"
-          echo "📦 APK available in artifacts"
+          echo "📱 App: ${{ inputs.tag }}"
           echo "🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       # ============================================================
-      # STEP 16: NOTIFY FAILURE
+      # STEP 14: NOTIFY FAILURE
       # ============================================================
       - name: ❌ Notify Failure
         if: failure()
@@ -384,6 +305,5 @@ jobs:
           echo "║                    ❌ BUILD FAILED ❌                          ║"
           echo "╚════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "📱 App: ${{ inputs.app_name }}"
-          echo "🏷️ Tag: ${{ inputs.tag }}"
+          echo "📱 App: ${{ inputs.tag }}"
           echo "🔗 Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
