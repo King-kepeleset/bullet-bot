@@ -52,8 +52,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # 🔧 FIX: kosongkan packages biar gak install 'tools' (deprecated)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      # 🔧 FIX: install manual paket yang dibutuhkan
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT || \
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Install tools (ImageMagick, jq)
         run: sudo apt-get update && sudo apt-get install -y imagemagick jq
@@ -480,8 +490,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # 🔧 FIX: kosongkan packages biar gak install 'tools' (deprecated)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      # 🔧 FIX: install manual paket yang dibutuhkan
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT || \
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Extract project ZIP
         run: |
