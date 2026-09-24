@@ -4,11 +4,15 @@ on:
   push:
     branches:
       - build
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # ═══════════════════════════════════════════════════════════
+  #  DETECT BUILD CONFIG
+  # ═══════════════════════════════════════════════════════════
   detect:
     runs-on: ubuntu-latest
     outputs:
@@ -25,12 +29,14 @@ jobs:
         shell: bash
         run: |
           if [ -f build-config.json ]; then
-            echo "type=$(jq -r .type build-config.json)" >> $GITHUB_OUTPUT
-            echo "url=$(jq -r .url build-config.json)" >> $GITHUB_OUTPUT
-            echo "app_name=$(jq -r .app_name build-config.json)" >> $GITHUB_OUTPUT
-            echo "build_type=$(jq -r .build_type build-config.json)" >> $GITHUB_OUTPUT
+            echo "type=$(jq -r '.type // "unknown"' build-config.json)" >> $GITHUB_OUTPUT
+            echo "url=$(jq -r '.url // ""' build-config.json)" >> $GITHUB_OUTPUT
+            echo "app_name=$(jq -r '.app_name // "MyApp"' build-config.json)" >> $GITHUB_OUTPUT
+            echo "build_type=$(jq -r '.build_type // "release"' build-config.json)" >> $GITHUB_OUTPUT
+            echo "─── build-config.json ───"
             cat build-config.json
           else
+            echo "⚠️ build-config.json not found"
             echo "type=unknown" >> $GITHUB_OUTPUT
           fi
 
@@ -41,7 +47,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.type == 'web2apk'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,30 +58,21 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 🔧 FIX: kosongkan packages biar gak install 'tools' (deprecated)
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
         with:
-          packages: ''
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
-      # 🔧 FIX: install manual paket yang dibutuhkan
-      - name: Install Android SDK components
-        run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT || \
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-read-only: false
 
       - name: Install tools (ImageMagick, jq)
         run: sudo apt-get update && sudo apt-get install -y imagemagick jq
-
-      - name: Setup Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
-          restore-keys: gradle-${{ runner.os }}-
 
       - name: Create project structure
         run: |
@@ -84,15 +81,6 @@ jobs:
 
       - name: Generate root gradle files
         run: |
-          cat > project/build.gradle <<'EOF'
-          buildscript {
-              repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:8.7.3' }
-          }
-          allprojects { repositories { google(); mavenCentral() } }
-          task clean(type: Delete) { delete rootProject.buildDir }
-          EOF
-
           cat > project/settings.gradle <<'EOF'
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -104,10 +92,20 @@ jobs:
           include ':app'
           EOF
 
+          cat > project/build.gradle <<'EOF'
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.7.3' }
+          }
+          allprojects { repositories { google(); mavenCentral() } }
+          task clean(type: Delete) { delete rootProject.buildDir }
+          EOF
+
           cat > project/gradle.properties <<'EOF'
           org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m
           org.gradle.parallel=true
           org.gradle.caching=true
+          org.gradle.daemon=false
           android.useAndroidX=true
           android.enableJetifier=true
           android.nonTransitiveRClass=true
@@ -117,9 +115,11 @@ jobs:
         run: |
           cat > project/app/build.gradle <<'EOF'
           plugins { id 'com.android.application' }
+
           android {
               namespace 'com.web2apk.app'
               compileSdk 34
+
               defaultConfig {
                   applicationId "com.web2apk.app"
                   minSdk 21
@@ -127,6 +127,7 @@ jobs:
                   versionCode 1
                   versionName "1.0"
               }
+
               signingConfigs {
                   release {
                       storeFile file("release.keystore")
@@ -135,6 +136,7 @@ jobs:
                       keyPassword "android"
                   }
               }
+
               buildTypes {
                   debug {
                       minifyEnabled false
@@ -147,14 +149,17 @@ jobs:
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
+
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+
               packagingOptions {
-                  resources.excludes += ['META-INF/*']
+                  resources.excludes += ['META-INF/*', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
               }
           }
+
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.7.0'
               implementation 'com.google.android.material:material:1.12.0'
@@ -311,6 +316,7 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
               <application
                   android:allowBackup="true"
                   android:hardwareAccelerated="true"
@@ -319,6 +325,7 @@ jobs:
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:label="@string/app_name"
                   android:theme="@style/AppTheme">
+
                   <activity
                       android:name=".SplashActivity"
                       android:exported="true"
@@ -328,6 +335,7 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+
                   <activity
                       android:name=".MainActivity"
                       android:exported="false"
@@ -343,17 +351,21 @@ jobs:
               xmlns:app="http://schemas.android.com/apk/res-auto"
               android:layout_width="match_parent" android:layout_height="match_parent"
               android:orientation="vertical">
+
               <androidx.appcompat.widget.Toolbar
                   android:id="@+id/toolbar"
                   android:layout_width="match_parent" android:layout_height="56dp"
                   android:background="#111111" app:titleTextColor="#FFFFFF"/>
+
               <ProgressBar
                   android:id="@+id/progressBar"
                   style="?android:attr/progressBarStyleHorizontal"
                   android:layout_width="match_parent" android:layout_height="3dp" android:max="100"/>
+
               <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
                   android:id="@+id/swipeRefreshLayout"
                   android:layout_width="match_parent" android:layout_height="match_parent">
+
                   <WebView android:id="@+id/webView"
                       android:layout_width="match_parent" android:layout_height="match_parent"/>
               </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
@@ -365,18 +377,22 @@ jobs:
           <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent"
               android:background="#000000">
+
               <LinearLayout
                   android:layout_width="wrap_content" android:layout_height="wrap_content"
                   android:layout_centerInParent="true" android:gravity="center"
                   android:orientation="vertical">
+
                   <ImageView android:id="@+id/splashLogo"
                       android:layout_width="120dp" android:layout_height="120dp"
                       android:src="@mipmap/ic_launcher"/>
+
                   <TextView android:id="@+id/splashAppName"
                       android:layout_width="wrap_content" android:layout_height="wrap_content"
                       android:text="@string/app_name" android:textSize="26sp"
                       android:textStyle="bold" android:textColor="#FFFFFF"
                       android:layout_marginTop="20dp"/>
+
                   <ProgressBar android:id="@+id/splashProgress"
                       android:layout_width="40dp" android:layout_height="40dp"
                       android:layout_marginTop="30dp"/>
@@ -420,49 +436,67 @@ jobs:
           touch project/app/proguard-rules.pro
 
       - name: Apply URL + app_name + icons + keystore
+        shell: bash
         run: |
+          set -e
           URL="${{ needs.detect.outputs.url }}"
           APP_NAME="${{ needs.detect.outputs.app_name }}"
 
-          sed -i "s|URL_PLACEHOLDER|${URL}|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
-          sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${APP_NAME}</string>|g" project/app/src/main/res/values/strings.xml
+          # Escape URL & app name untuk sed
+          URL_ESC=$(printf '%s\n' "$URL" | sed -e 's/[\/&|]/\\&/g')
+          APP_NAME_ESC=$(printf '%s\n' "$APP_NAME" | sed -e 's/[\/&|]/\\&/g')
 
-          if [ ! -f build-assets/icon.png ] || ! file build-assets/icon.png | grep -q PNG; then
-            echo "⚠️ Icon tidak valid, membuat default..."
+          sed -i "s|URL_PLACEHOLDER|${URL_ESC}|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
+          sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${APP_NAME_ESC}</string>|g" project/app/src/main/res/values/strings.xml
+
+          # Icon validation
+          if [ ! -f build-assets/icon.png ] || ! file build-assets/icon.png | grep -q "PNG image"; then
+            echo "⚠️ Icon tidak valid / tidak ada, membuat default..."
+            mkdir -p build-assets
             convert -size 512x512 xc:'#3B4FE0' -gravity center \
               -fill white -pointsize 180 -annotate +0+0 '📱' build-assets/icon.png 2>/dev/null || \
               convert -size 512x512 xc:'#3B4FE0' build-assets/icon.png
           fi
 
+          # Generate icons
           convert build-assets/icon.png -resize 72x72   project/app/src/main/res/mipmap-hdpi/ic_launcher.png
           convert build-assets/icon.png -resize 48x48   project/app/src/main/res/mipmap-mdpi/ic_launcher.png
           convert build-assets/icon.png -resize 96x96   project/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert build-assets/icon.png -resize 144x144 project/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert build-assets/icon.png -resize 192x192 project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
-          cp project/app/src/main/res/mipmap-hdpi/ic_launcher.png   project/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-mdpi/ic_launcher.png   project/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png  project/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-xxhdpi/ic_launcher.png project/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
-          cp project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png project/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          for d in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
+            cp "project/app/src/main/res/mipmap-$d/ic_launcher.png" \
+               "project/app/src/main/res/mipmap-$d/ic_launcher_round.png"
+          done
 
+          # Keystore
           keytool -genkey -v -keystore project/app/release.keystore \
             -alias release -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
             -dname "CN=BuildBot, OU=Dev, O=BuildBot, L=City, S=State, C=ID"
 
       - name: Build Web2Apk
+        working-directory: project
         run: |
-          cd project
-          chmod +x gradlew 2>/dev/null || true
-          gradle wrapper --gradle-version 8.9 --no-daemon 2>/dev/null || true
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          set -e
+          echo "=== Gradle version ==="
+          gradle --version
+          echo "=== Building ==="
+          gradle assembleRelease --no-daemon --stacktrace
 
       - name: Rename APK
+        shell: bash
         run: |
+          set -e
           APK=$(find project/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "❌ APK tidak ditemukan"
+            exit 1
+          fi
           mkdir -p output
           cp "$APK" output/Web2Apk-Release.apk
+          ls -lh output/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -470,7 +504,7 @@ jobs:
           name: app
           path: output/*.apk
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
 
   # ═══════════════════════════════════════════════════════════
   #  NATIVE FLUTTER BUILD (ZIP)
@@ -479,7 +513,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.type == 'flutter'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -490,49 +524,58 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 🔧 FIX: kosongkan packages biar gak install 'tools' (deprecated)
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
         with:
-          packages: ''
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
-      # 🔧 FIX: install manual paket yang dibutuhkan
-      - name: Install Android SDK components
+      - name: Extract + validate project ZIP
+        shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT || \
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Extract project ZIP
-        run: |
+          set -e
           rm -rf flutter-project
           mkdir -p flutter-project
           unzip -q flutter-project.zip -d flutter-project
 
-          FIRST_DIR=$(find flutter-project -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          ROOT_FILES=$(find flutter-project -mindepth 1 -maxdepth 1 | wc -l)
+          # Cleanup folder yang bikin build error
+          find flutter-project -type d -name "build"       -prune -exec rm -rf {} + 2>/dev/null || true
+          find flutter-project -type d -name ".dart_tool"  -prune -exec rm -rf {} + 2>/dev/null || true
+          find flutter-project -type d -name ".git"        -prune -exec rm -rf {} + 2>/dev/null || true
+          find flutter-project -type d -name ".gradle"     -prune -exec rm -rf {} + 2>/dev/null || true
 
-          if [ "$ROOT_FILES" = "1" ] && [ -n "$FIRST_DIR" ] && [ -f "$FIRST_DIR/pubspec.yaml" ]; then
+          # Kalau zip cuma ada 1 folder, isinya naik ke root
+          ROOT_ITEMS=$(find flutter-project -mindepth 1 -maxdepth 1 | wc -l)
+          FIRST_DIR=$(find flutter-project -mindepth 1 -maxdepth 1 -type d | head -n 1)
+
+          if [ "$ROOT_ITEMS" = "1" ] && [ -n "$FIRST_DIR" ] && [ -f "$FIRST_DIR/pubspec.yaml" ]; then
+            echo "📦 Nested folder detected, moving up..."
             TMP=$(mktemp -d)
             cp -R "$FIRST_DIR"/. "$TMP"/
             rm -rf flutter-project
             mkdir -p flutter-project
             cp -R "$TMP"/. flutter-project/
+            rm -rf "$TMP"
           fi
 
           if [ ! -f flutter-project/pubspec.yaml ]; then
-            echo "❌ pubspec.yaml tidak ditemukan"
+            echo "❌ pubspec.yaml tidak ditemukan di root"
+            find flutter-project -maxdepth 2 -type f | head -20
             exit 1
           fi
 
-      - name: Detect Flutter version from pubspec
+          echo "✅ Project structure:"
+          ls -la flutter-project/
+
+      - name: Detect Flutter version
         id: flutter_detect
         shell: bash
         run: |
           set -e
           PUBSPEC="flutter-project/pubspec.yaml"
           SDK_LINE=$(grep -A2 '^environment:' "$PUBSPEC" | grep 'sdk:' | head -n1 | sed 's/.*sdk:[[:space:]]*//; s/["'"'"']//g' || true)
-          echo "Detected SDK: $SDK_LINE"
+          echo "Detected SDK constraint: $SDK_LINE"
 
           FLUTTER_VERSION="3.27.0"
           DART_VERSION=$(echo "$SDK_LINE" | grep -oE '[0-9]+\.[0-9]+' | head -n1)
@@ -552,12 +595,14 @@ jobs:
             esac
           fi
 
+          # Override kalau ada dependency high-version
           if grep -Eq 'webview_flutter:[[:space:]]*(\^|>=)?(4\.(1[5-9]|[2-9][0-9])|5\.)' "$PUBSPEC"; then FLUTTER_VERSION="3.35.2"; fi
           if grep -Eq 'geolocator:[[:space:]]*(\^|>=)?1[4-9]\.' "$PUBSPEC"; then FLUTTER_VERSION="3.35.2"; fi
           if grep -Eq 'firebase_core:[[:space:]]*(\^|>=)?3\.' "$PUBSPEC"; then FLUTTER_VERSION="3.35.2"; fi
+          if grep -Eq 'flutter_launcher_icons:[[:space:]]*(\^|>=)?0\.14\.' "$PUBSPEC"; then FLUTTER_VERSION="3.35.2"; fi
 
           echo "FLUTTER_VERSION=$FLUTTER_VERSION" >> $GITHUB_ENV
-          echo "Using Flutter $FLUTTER_VERSION"
+          echo "🎯 Using Flutter $FLUTTER_VERSION"
 
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
@@ -584,12 +629,13 @@ jobs:
           set -e
           cd flutter-project
 
-          echo "=== Flutter Version ==="
+          echo "════════════════════════════════════════"
           flutter --version
-          echo "========================"
+          echo "════════════════════════════════════════"
 
           BUILD_MODE="${{ needs.detect.outputs.build_type }}"
           PUB_LOG="../pubget.log"
+          BUILD_LOG="../build.log"
           MAX_RETRIES=5
           RETRY=0
           SUCCESS=false
@@ -601,7 +647,7 @@ jobs:
 
           auto_fix_pubspec() {
             local FIXED=false
-            echo "=== Auto-fixing pubspec.yaml ==="
+            echo "=== 🔧 Auto-fixing pubspec.yaml ==="
 
             if grep -q "requires SDK version\|requires Dart SDK" "$PUB_LOG"; then
               sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true
@@ -635,35 +681,56 @@ jobs:
               sed -i -E "s/image_picker:.*/image_picker: ^1.1.2/g" pubspec.yaml || true
               FIXED=true
             fi
+            if grep -q "intl" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/intl:.*/intl: ^0.19.0/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "http" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/http:.*/http: ^1.2.2/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "shared_preferences" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/shared_preferences:.*/shared_preferences: ^2.3.2/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "url_launcher" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/url_launcher:.*/url_launcher: ^6.3.1/g" pubspec.yaml || true
+              FIXED=true
+            fi
 
             if [ "$FIXED" = true ]; then
-              echo "✅ Pubspec di-fix"
+              echo "✅ Pubspec diperbaiki"
               rm -f pubspec.lock
+            else
+              echo "⚠️ Tidak ada fix yang bisa diterapkan"
             fi
           }
 
           while [ $RETRY -lt $MAX_RETRIES ] && [ "$SUCCESS" = false ]; do
             RETRY=$((RETRY + 1))
-            echo "=== Attempt $RETRY of $MAX_RETRIES ==="
+            echo ""
+            echo "════════════════════════════════════════"
+            echo "🔄 Attempt $RETRY / $MAX_RETRIES"
+            echo "════════════════════════════════════════"
 
             if try_pub_get; then
               echo "✅ pub get berhasil"
 
               if [ "$BUILD_MODE" = "debug" ]; then
-                if flutter build apk --debug --target-platform android-arm,android-arm64,android-x64; then
-                  SUCCESS=true
-                  break
-                fi
+                BUILD_CMD="flutter build apk --debug --target-platform android-arm,android-arm64,android-x64"
               else
-                if flutter build apk --release --target-platform android-arm,android-arm64,android-x64; then
-                  SUCCESS=true
-                  break
-                fi
+                BUILD_CMD="flutter build apk --release --target-platform android-arm,android-arm64,android-x64"
+              fi
+
+              if $BUILD_CMD 2>&1 | tee "$BUILD_LOG"; then
+                SUCCESS=true
+                break
               fi
 
               echo "❌ Build gagal, mencoba fix..."
               auto_fix_pubspec
-              rm -rf build .dart_tool
+              rm -rf build .dart_tool android/.gradle android/build
+              flutter clean
             else
               echo "❌ pub get gagal, mencoba fix..."
               auto_fix_pubspec
@@ -673,16 +740,36 @@ jobs:
 
           if [ "$SUCCESS" = false ]; then
             echo "❌ Build gagal setelah $MAX_RETRIES percobaan"
-            cat "$PUB_LOG" 2>/dev/null || true
+            echo "─── pub get log (tail) ───"
+            tail -50 "$PUB_LOG" 2>/dev/null || true
+            echo "─── build log (tail) ───"
+            tail -80 "$BUILD_LOG" 2>/dev/null || true
             exit 1
           fi
 
+          echo "✅ Build sukses!"
+
       - name: Rename APK
+        shell: bash
         run: |
+          set -e
           APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "❌ APK tidak ditemukan di flutter-project/build/app/outputs/flutter-apk"
+            ls -la flutter-project/build/app/outputs/ 2>/dev/null || true
+            exit 1
+          fi
+
           MODE="${{ needs.detect.outputs.build_type }}"
+          if [ "$MODE" = "debug" ]; then
+            MODE_CAP="Debug"
+          else
+            MODE_CAP="Release"
+          fi
+
           mkdir -p output
-          cp "$APK" "output/Flutter-${MODE^}.apk"
+          cp "$APK" "output/Flutter-${MODE_CAP}.apk"
+          ls -lh output/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -690,4 +777,4 @@ jobs:
           name: app
           path: output/*.apk
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
