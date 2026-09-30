@@ -6,10 +6,10 @@ on:
       - build
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE20: true
-
 jobs:
+  # ═══════════════════════════════════════════════════════════
+  #  DETECT BUILD CONFIG
+  # ═══════════════════════════════════════════════════════════
   detect:
     runs-on: ubuntu-latest
     outputs:
@@ -18,7 +18,9 @@ jobs:
       app_name: ${{ steps.read.outputs.app_name }}
       build_type: ${{ steps.read.outputs.build_type }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Read build config
         id: read
         shell: bash
@@ -28,44 +30,79 @@ jobs:
             echo "url=$(jq -r '.url // ""' build-config.json)" >> $GITHUB_OUTPUT
             echo "app_name=$(jq -r '.app_name // "MyApp"' build-config.json)" >> $GITHUB_OUTPUT
             echo "build_type=$(jq -r '.build_type // "release"' build-config.json)" >> $GITHUB_OUTPUT
+            echo "─── build-config.json ───"
+            cat build-config.json
           else
-            echo "type=unknown" >> $GITHUB_OUTPUT
+            echo "❌ build-config.json tidak ditemukan."
+            echo "Bot harus mengirim build-config.json sebelum workflow dijalankan."
+            exit 1
           fi
 
+          TYPE=$(jq -r '.type // empty' build-config.json)
+          BUILD_TYPE=$(jq -r '.build_type // "release"' build-config.json)
+
+          case "$TYPE" in
+            flutter|web2apk) ;;
+            *)
+              echo "❌ type build tidak valid: $TYPE"
+              echo "Gunakan: flutter atau web2apk"
+              exit 1
+              ;;
+          esac
+
+          case "$BUILD_TYPE" in
+            debug|release) ;;
+            *)
+              echo "❌ build_type tidak valid: $BUILD_TYPE"
+              echo "Gunakan: debug atau release"
+              exit 1
+              ;;
+          esac
+
+  # ═══════════════════════════════════════════════════════════
+  #  WEB2APK BUILD (Android WebView wrapper)
+  # ═══════════════════════════════════════════════════════════
   web2apk:
     needs: detect
     if: needs.detect.outputs.type == 'web2apk'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          packages: |
+            platform-tools
+            platforms;android-34
+            platforms;android-35
+            build-tools;34.0.0
+            build-tools;35.0.0
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      # 🔥 FIX UTAMA — accept lisensi non-interaktif
-      - name: Accept Android SDK licenses
+      - name: Accept Android SDK licenses (non-interactive)
         shell: bash
         run: |
           set -e
           yes | sdkmanager --licenses || true
-          mkdir -p $ANDROID_HOME/ndk-bundle/toolchains/mips64el-linux-android/prebuilt/linux-x86_64 || true
           echo "✅ All Android SDK licenses accepted."
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
           cache-read-only: false
 
-      - name: Install tools
+      - name: Install tools (ImageMagick, jq)
         run: sudo apt-get update && sudo apt-get install -y imagemagick jq
 
       - name: Create project structure
@@ -73,7 +110,7 @@ jobs:
           mkdir -p project/app/src/main/java/com/web2apk/app
           mkdir -p project/app/src/main/res/{layout,values,mipmap-hdpi,mipmap-mdpi,mipmap-xhdpi,mipmap-xxhdpi,mipmap-xxxhdpi}
 
-      - name: Generate gradle files
+      - name: Generate root gradle files
         run: |
           cat > project/settings.gradle <<'EOF'
           pluginManagement {
@@ -113,6 +150,7 @@ jobs:
           android {
               namespace 'com.web2apk.app'
               compileSdk 34
+
               defaultConfig {
                   applicationId "com.web2apk.app"
                   minSdk 21
@@ -120,6 +158,7 @@ jobs:
                   versionCode 1
                   versionName "1.0"
               }
+
               signingConfigs {
                   release {
                       storeFile file("release.keystore")
@@ -128,8 +167,12 @@ jobs:
                       keyPassword "android"
                   }
               }
+
               buildTypes {
-                  debug { minifyEnabled false; debuggable true }
+                  debug {
+                      minifyEnabled false
+                      debuggable true
+                  }
                   release {
                       signingConfig signingConfigs.release
                       minifyEnabled false
@@ -137,10 +180,12 @@ jobs:
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
+
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+
               packagingOptions {
                   resources.excludes += ['META-INF/*', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
               }
@@ -155,10 +200,11 @@ jobs:
           }
           EOF
 
-      - name: Generate MainActivity + Splash
+      - name: Generate MainActivity.java
         run: |
           cat > project/app/src/main/java/com/web2apk/app/MainActivity.java <<'EOF'
           package com.web2apk.app;
+
           import android.annotation.SuppressLint;
           import android.app.DownloadManager;
           import android.content.Intent;
@@ -194,7 +240,9 @@ jobs:
                   swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
                   Toolbar toolbar = findViewById(R.id.toolbar);
                   setSupportActionBar(toolbar);
-                  if (getSupportActionBar() != null) getSupportActionBar().setTitle(getString(R.string.app_name));
+                  if (getSupportActionBar() != null) {
+                      getSupportActionBar().setTitle(getString(R.string.app_name));
+                  }
                   setupWebView();
                   swipeRefreshLayout.setOnRefreshListener(() -> webView.reload());
                   webView.loadUrl(WEBSITE_URL);
@@ -215,31 +263,41 @@ jobs:
                   s.setDisplayZoomControls(false);
                   s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
                   s.setCacheMode(WebSettings.LOAD_DEFAULT);
+
                   CookieManager cm = CookieManager.getInstance();
                   cm.setAcceptCookie(true);
                   cm.setAcceptThirdPartyCookies(webView, true);
+
                   webView.setWebViewClient(new WebViewClient() {
-                      @Override public void onPageFinished(WebView v, String u) {
+                      @Override
+                      public void onPageFinished(WebView v, String u) {
                           progressBar.setVisibility(View.GONE);
                           swipeRefreshLayout.setRefreshing(false);
                       }
-                      @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                           String u = r.getUrl().toString();
-                          if (u.startsWith("tel:") || u.startsWith("mailto:") || u.startsWith("intent:") || u.startsWith("whatsapp:")) {
-                              try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); } catch (Exception ignored) {}
+                          if (u.startsWith("tel:") || u.startsWith("mailto:") ||
+                              u.startsWith("intent:") || u.startsWith("whatsapp:")) {
+                              try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); }
+                              catch (Exception ignored) {}
                               return true;
                           }
                           return false;
                       }
                   });
+
                   webView.setWebChromeClient(new WebChromeClient() {
-                      @Override public void onProgressChanged(WebView v, int p) {
+                      @Override
+                      public void onProgressChanged(WebView v, int p) {
                           progressBar.setProgress(p);
                           progressBar.setVisibility(p >= 100 ? View.GONE : View.VISIBLE);
                       }
                   });
+
                   webView.setDownloadListener(new DownloadListener() {
-                      @Override public void onDownloadStart(String url, String ua, String cd, String mt, long cl) {
+                      @Override
+                      public void onDownloadStart(String url, String ua, String cd, String mt, long cl) {
                           DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
                           req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                           req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, cd);
@@ -247,10 +305,12 @@ jobs:
                           dm.enqueue(req);
                       }
                   });
+
                   webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
               }
 
-              @Override public void onBackPressed() {
+              @Override
+              public void onBackPressed() {
                   if (webView != null && webView.canGoBack()) { webView.goBack(); return; }
                   super.onBackPressed();
               }
@@ -287,6 +347,7 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
               <application
                   android:allowBackup="true"
                   android:hardwareAccelerated="true"
@@ -295,13 +356,20 @@ jobs:
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:label="@string/app_name"
                   android:theme="@style/AppTheme">
-                  <activity android:name=".SplashActivity" android:exported="true" android:theme="@style/SplashTheme">
+
+                  <activity
+                      android:name=".SplashActivity"
+                      android:exported="true"
+                      android:theme="@style/SplashTheme">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  <activity android:name=".MainActivity" android:exported="false"
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="false"
                       android:launchMode="singleTop"
                       android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
               </application>
@@ -314,17 +382,21 @@ jobs:
               xmlns:app="http://schemas.android.com/apk/res-auto"
               android:layout_width="match_parent" android:layout_height="match_parent"
               android:orientation="vertical">
+
               <androidx.appcompat.widget.Toolbar
                   android:id="@+id/toolbar"
                   android:layout_width="match_parent" android:layout_height="56dp"
                   android:background="#111111" app:titleTextColor="#FFFFFF"/>
+
               <ProgressBar
                   android:id="@+id/progressBar"
                   style="?android:attr/progressBarStyleHorizontal"
                   android:layout_width="match_parent" android:layout_height="3dp" android:max="100"/>
+
               <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
                   android:id="@+id/swipeRefreshLayout"
                   android:layout_width="match_parent" android:layout_height="match_parent">
+
                   <WebView android:id="@+id/webView"
                       android:layout_width="match_parent" android:layout_height="match_parent"/>
               </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
@@ -336,16 +408,22 @@ jobs:
           <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent"
               android:background="#000000">
+
               <LinearLayout
                   android:layout_width="wrap_content" android:layout_height="wrap_content"
-                  android:layout_centerInParent="true" android:gravity="center" android:orientation="vertical">
+                  android:layout_centerInParent="true" android:gravity="center"
+                  android:orientation="vertical">
+
                   <ImageView android:id="@+id/splashLogo"
                       android:layout_width="120dp" android:layout_height="120dp"
                       android:src="@mipmap/ic_launcher"/>
+
                   <TextView android:id="@+id/splashAppName"
                       android:layout_width="wrap_content" android:layout_height="wrap_content"
                       android:text="@string/app_name" android:textSize="26sp"
-                      android:textStyle="bold" android:textColor="#FFFFFF" android:layout_marginTop="20dp"/>
+                      android:textStyle="bold" android:textColor="#FFFFFF"
+                      android:layout_marginTop="20dp"/>
+
                   <ProgressBar android:id="@+id/splashProgress"
                       android:layout_width="40dp" android:layout_height="40dp"
                       android:layout_marginTop="30dp"/>
@@ -394,22 +472,36 @@ jobs:
           set -e
           URL="${{ needs.detect.outputs.url }}"
           APP_NAME="${{ needs.detect.outputs.app_name }}"
+
+          # Escape URL & app name untuk sed
           URL_ESC=$(printf '%s\n' "$URL" | sed -e 's/[\/&|]/\\&/g')
           APP_NAME_ESC=$(printf '%s\n' "$APP_NAME" | sed -e 's/[\/&|]/\\&/g')
+
           sed -i "s|URL_PLACEHOLDER|${URL_ESC}|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
           sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${APP_NAME_ESC}</string>|g" project/app/src/main/res/values/strings.xml
 
+          # Icon validation
           if [ ! -f build-assets/icon.png ] || ! file build-assets/icon.png | grep -q "PNG image"; then
+            echo "⚠️ Icon tidak valid / tidak ada, membuat default..."
             mkdir -p build-assets
-            convert -size 512x512 xc:'#3B4FE0' build-assets/icon.png
+            convert -size 512x512 xc:'#3B4FE0' -gravity center \
+              -fill white -pointsize 180 -annotate +0+0 '📱' build-assets/icon.png 2>/dev/null || \
+              convert -size 512x512 xc:'#3B4FE0' build-assets/icon.png
           fi
 
-          for pair in "hdpi 72" "mdpi 48" "xhdpi 96" "xxhdpi 144" "xxxhdpi 192"; do
-            set -- $pair
-            convert build-assets/icon.png -resize ${2}x${2} project/app/src/main/res/mipmap-${1}/ic_launcher.png
-            cp project/app/src/main/res/mipmap-${1}/ic_launcher.png project/app/src/main/res/mipmap-${1}/ic_launcher_round.png
+          # Generate icons
+          convert build-assets/icon.png -resize 72x72   project/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert build-assets/icon.png -resize 48x48   project/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert build-assets/icon.png -resize 96x96   project/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert build-assets/icon.png -resize 144x144 project/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert build-assets/icon.png -resize 192x192 project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+          for d in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
+            cp "project/app/src/main/res/mipmap-$d/ic_launcher.png" \
+               "project/app/src/main/res/mipmap-$d/ic_launcher_round.png"
           done
 
+          # Keystore
           keytool -genkey -v -keystore project/app/release.keystore \
             -alias release -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
@@ -419,167 +511,321 @@ jobs:
         working-directory: project
         run: |
           set -e
+          echo "=== Gradle version ==="
           gradle --version
+          echo "=== Building ==="
           gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Rename + Upload APK
+      - name: Rename APK
         shell: bash
         run: |
           set -e
           APK=$(find project/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          [ -z "$APK" ] && { echo "❌ APK tidak ditemukan"; exit 1; }
+          if [ -z "$APK" ]; then
+            echo "❌ APK tidak ditemukan"
+            exit 1
+          fi
           mkdir -p output
           cp "$APK" output/Web2Apk-Release.apk
           ls -lh output/
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: app
           path: output/*.apk
           if-no-files-found: error
           retention-days: 7
 
+  # ═══════════════════════════════════════════════════════════
+  #  NATIVE FLUTTER BUILD (ZIP)
+  # ═══════════════════════════════════════════════════════════
   flutter:
     needs: detect
     if: needs.detect.outputs.type == 'flutter'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          packages: |
+            platform-tools
+            platforms;android-34
+            platforms;android-35
+            build-tools;34.0.0
+            build-tools;35.0.0
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Accept Android SDK licenses
+      - name: Accept Android SDK licenses (non-interactive)
         shell: bash
         run: |
           set -e
           yes | sdkmanager --licenses || true
-          mkdir -p $ANDROID_HOME/ndk-bundle/toolchains/mips64el-linux-android/prebuilt/linux-x86_64 || true
           echo "✅ All Android SDK licenses accepted."
 
-      - name: Extract + validate ZIP
+      - name: Extract + validate project ZIP
         shell: bash
         run: |
           set -e
           rm -rf flutter-project
           mkdir -p flutter-project
           unzip -q flutter-project.zip -d flutter-project
-          find flutter-project -type d \( -name "build" -o -name ".dart_tool" -o -name ".git" -o -name ".gradle" \) -prune -exec rm -rf {} + 2>/dev/null || true
 
-          ROOT_ITEMS=$(find flutter-project -mindepth 1 -maxdepth 1 | wc -l)
-          FIRST_DIR=$(find flutter-project -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          if [ "$ROOT_ITEMS" = "1" ] && [ -n "$FIRST_DIR" ] && [ -f "$FIRST_DIR/pubspec.yaml" ]; then
-            TMP=$(mktemp -d); cp -R "$FIRST_DIR"/. "$TMP"/
-            rm -rf flutter-project; mkdir -p flutter-project
-            cp -R "$TMP"/. flutter-project/; rm -rf "$TMP"
+          # Cleanup folder yang bikin build error
+          find flutter-project -type d -name "build"       -prune -exec rm -rf {} + 2>/dev/null || true
+          find flutter-project -type d -name ".dart_tool"  -prune -exec rm -rf {} + 2>/dev/null || true
+          find flutter-project -type d -name ".git"        -prune -exec rm -rf {} + 2>/dev/null || true
+          find flutter-project -type d -name ".gradle"     -prune -exec rm -rf {} + 2>/dev/null || true
+
+          # Cari pubspec.yaml. ZIP dari HP sering membungkus project
+          # dalam satu folder atau beberapa level folder.
+          PUBSPEC=$(find flutter-project -type f -name pubspec.yaml -print -quit)
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "❌ pubspec.yaml tidak ditemukan di dalam ZIP."
+            find flutter-project -maxdepth 4 -type f | head -50
+            exit 1
           fi
-          [ ! -f flutter-project/pubspec.yaml ] && { echo "❌ pubspec.yaml tidak ditemukan"; exit 1; }
+
+          PROJECT_ROOT=$(dirname "$PUBSPEC")
+          if [ "$PROJECT_ROOT" != "flutter-project" ]; then
+            echo "📦 Project root ditemukan: $PROJECT_ROOT"
+            TMP=$(mktemp -d)
+            cp -R "$PROJECT_ROOT"/. "$TMP"/
+            rm -rf flutter-project
+            mkdir -p flutter-project
+            cp -R "$TMP"/. flutter-project/
+            rm -rf "$TMP"
+          fi
+
+          test -f flutter-project/pubspec.yaml || {
+            echo "❌ Gagal menormalkan project Flutter."
+            exit 1
+          }
+
+          echo "✅ Project structure:"
+          ls -la flutter-project/
 
       - name: Detect Flutter version
+        id: flutter_detect
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           PUBSPEC="flutter-project/pubspec.yaml"
-          SDK_LINE=$(grep -A2 '^environment:' "$PUBSPEC" | grep 'sdk:' | head -n1 | sed 's/.*sdk:[[:space:]]*//; s/["'"'"']//g' || true)
-          FLUTTER_VERSION="3.27.0"
-          DART_VERSION=$(echo "$SDK_LINE" | grep -oE '[0-9]+\.[0-9]+' | head -n1)
-          if [ -n "$DART_VERSION" ]; then
-            case "$DART_VERSION" in
-              "3.10"*|"3.11"*|"3.12"*|"3.13"*|"3.14"*|"3.15"*|"3.8"*|"3.9"*) FLUTTER_VERSION="3.35.2" ;;
-              "3.7"*) FLUTTER_VERSION="3.29.0" ;;
-              "3.6"*) FLUTTER_VERSION="3.27.0" ;;
-              "3.5"*) FLUTTER_VERSION="3.24.0" ;;
-              "3.4"*) FLUTTER_VERSION="3.22.0" ;;
-              "3.3"*) FLUTTER_VERSION="3.19.0" ;;
-              "3.2"*) FLUTTER_VERSION="3.16.0" ;;
-              "3.1"*) FLUTTER_VERSION="3.13.0" ;;
-              "3.0"*) FLUTTER_VERSION="3.10.0" ;;
-            esac
-          fi
-          grep -Eq 'webview_flutter:[[:space:]]*(\^|>=)?(4\.(1[5-9]|[2-9][0-9])|5\.)' "$PUBSPEC" && FLUTTER_VERSION="3.35.2"
-          grep -Eq 'geolocator:[[:space:]]*(\^|>=)?1[4-9]\.' "$PUBSPEC" && FLUTTER_VERSION="3.35.2"
-          grep -Eq 'firebase_core:[[:space:]]*(\^|>=)?3\.' "$PUBSPEC" && FLUTTER_VERSION="3.35.2"
-          echo "FLUTTER_VERSION=$FLUTTER_VERSION" >> $GITHUB_ENV
 
-      - uses: subosito/flutter-action@v2
+          SDK_CONSTRAINT=$(awk '
+            /^environment:/ { in_env=1; next }
+            in_env && /^[[:space:]]+sdk:/ {
+              sub(/^[[:space:]]*sdk:[[:space:]]*/, "");
+              gsub(/["'"'"']/, "");
+              print;
+              exit
+            }
+          ' "$PUBSPEC" || true)
+
+          echo "Detected Dart SDK constraint: ${SDK_CONSTRAINT:-unknown}"
+
+          # Default yang konservatif. Jika constraint membutuhkan Dart yang lebih baru,
+          # gunakan Flutter stable yang menyediakan Dart tersebut.
+          FLUTTER_VERSION="3.27.0"
+
+          if echo "$SDK_CONSTRAINT" | grep -Eq '3\.(8|9|10|11|12|13|14|15)'; then
+            FLUTTER_VERSION="3.35.2"
+          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.7'; then
+            FLUTTER_VERSION="3.29.0"
+          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.6'; then
+            FLUTTER_VERSION="3.27.0"
+          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.5'; then
+            FLUTTER_VERSION="3.24.0"
+          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.4'; then
+            FLUTTER_VERSION="3.22.0"
+          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.3'; then
+            FLUTTER_VERSION="3.19.0"
+          fi
+
+          echo "FLUTTER_VERSION=$FLUTTER_VERSION" >> "$GITHUB_ENV"
+          echo "Using Flutter $FLUTTER_VERSION"
+
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
-      - uses: actions/cache@v4
+      - name: Setup Gradle cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-flutter-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: gradle-flutter-${{ runner.os }}-
 
-      - run: flutter precache --android --no-ios --no-web 2>&1 | tail -3
+      - name: Pre-cache Flutter artifacts
+        run: flutter precache --android --no-ios --no-web 2>&1 | tail -3
 
       - name: Build Flutter APK
         shell: bash
         run: |
           set -e
           cd flutter-project
+
+          echo "════════════════════════════════════════"
           flutter --version
+          echo "════════════════════════════════════════"
+
           BUILD_MODE="${{ needs.detect.outputs.build_type }}"
-          PUB_LOG="../pubget.log"; BUILD_LOG="../build.log"
-          MAX_RETRIES=5; RETRY=0; SUCCESS=false
+          PUB_LOG="../pubget.log"
+          BUILD_LOG="../build.log"
+          MAX_RETRIES=5
+          RETRY=0
+          SUCCESS=false
+
+          try_pub_get() {
+            flutter pub get 2>&1 | tee "$PUB_LOG"
+            return ${PIPESTATUS[0]}
+          }
 
           auto_fix_pubspec() {
             local FIXED=false
-            grep -q "requires SDK version\|requires Dart SDK" "$PUB_LOG" && { sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "webview_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/webview_flutter:.*/webview_flutter: ^4.13.0/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "geolocator" "$PUB_LOG" && grep -qE "toARGB32|geolocator_android" "$PUB_LOG" && { sed -i -E "s/geolocator:.*/geolocator: ^13.0.4/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "firebase_core" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/firebase_core:.*/firebase_core: ^2.32.0/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "image_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/image_picker:.*/image_picker: ^1.1.2/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "intl" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/intl:.*/intl: ^0.19.0/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "http" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/http:.*/http: ^1.2.2/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "shared_preferences" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/shared_preferences:.*/shared_preferences: ^2.3.2/g" pubspec.yaml || true; FIXED=true; }
-            grep -q "url_launcher" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG" && { sed -i -E "s/url_launcher:.*/url_launcher: ^6.3.1/g" pubspec.yaml || true; FIXED=true; }
-            [ "$FIXED" = true ] && rm -f pubspec.lock
+            echo "=== 🔧 Auto-fixing pubspec.yaml ==="
+
+            if grep -q "requires SDK version\|requires Dart SDK" "$PUB_LOG"; then
+              sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "webview_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/webview_flutter:.*/webview_flutter: ^4.13.0/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "geolocator" "$PUB_LOG" && grep -qE "toARGB32|geolocator_android" "$PUB_LOG"; then
+              sed -i -E "s/geolocator:.*/geolocator: ^13.0.4/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "google_maps_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/google_maps_flutter:.*/google_maps_flutter: ^2.9.0/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "permission_handler" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/permission_handler:.*/permission_handler: ^11.3.1/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "firebase_core" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              echo "⚠️ firebase_core terdeteksi; dependency tidak dipaksa downgrade otomatis."
+              FIXED=true
+            fi
+            if grep -q "file_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/file_picker:.*/file_picker: ^6.2.1/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "image_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/image_picker:.*/image_picker: ^1.1.2/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "intl" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/intl:.*/intl: ^0.19.0/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "http" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/http:.*/http: ^1.2.2/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "shared_preferences" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/shared_preferences:.*/shared_preferences: ^2.3.2/g" pubspec.yaml || true
+              FIXED=true
+            fi
+            if grep -q "url_launcher" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+              sed -i -E "s/url_launcher:.*/url_launcher: ^6.3.1/g" pubspec.yaml || true
+              FIXED=true
+            fi
+
+            if [ "$FIXED" = true ]; then
+              echo "✅ Pubspec diperbaiki"
+              rm -f pubspec.lock
+            else
+              echo "⚠️ Tidak ada fix yang bisa diterapkan"
+            fi
           }
 
           while [ $RETRY -lt $MAX_RETRIES ] && [ "$SUCCESS" = false ]; do
             RETRY=$((RETRY + 1))
+            echo ""
+            echo "════════════════════════════════════════"
             echo "🔄 Attempt $RETRY / $MAX_RETRIES"
-            if flutter pub get 2>&1 | tee "$PUB_LOG"; then
-              BUILD_CMD="flutter build apk --${BUILD_MODE} --target-platform android-arm,android-arm64,android-x64"
-              if $BUILD_CMD 2>&1 | tee "$BUILD_LOG"; then SUCCESS=true; break; fi
+            echo "════════════════════════════════════════"
+
+            if try_pub_get; then
+              echo "✅ pub get berhasil"
+
+              if [ "$BUILD_MODE" = "debug" ]; then
+                BUILD_CMD="flutter build apk --debug --target-platform android-arm,android-arm64,android-x64"
+              else
+                BUILD_CMD="flutter build apk --release --target-platform android-arm,android-arm64,android-x64"
+              fi
+
+              if $BUILD_CMD 2>&1 | tee "$BUILD_LOG"; then
+                SUCCESS=true
+                break
+              fi
+
+              echo "❌ Build gagal, mencoba fix..."
               auto_fix_pubspec
               rm -rf build .dart_tool android/.gradle android/build
               flutter clean
             else
+              echo "❌ pub get gagal, mencoba fix..."
               auto_fix_pubspec
               rm -f pubspec.lock
             fi
           done
 
-          [ "$SUCCESS" = false ] && { tail -50 "$PUB_LOG" 2>/dev/null || true; tail -80 "$BUILD_LOG" 2>/dev/null || true; exit 1; }
+          if [ "$SUCCESS" = false ]; then
+            echo "❌ Build gagal setelah $MAX_RETRIES percobaan"
+            echo "─── pub get log (tail) ───"
+            tail -50 "$PUB_LOG" 2>/dev/null || true
+            echo "─── build log (tail) ───"
+            tail -80 "$BUILD_LOG" 2>/dev/null || true
+            exit 1
+          fi
+
           echo "✅ Build sukses!"
 
-      - name: Rename + Upload APK
+      - name: Rename APK
         shell: bash
         run: |
           set -e
           APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n 1)
-          [ -z "$APK" ] && { echo "❌ APK tidak ditemukan"; exit 1; }
+          if [ -z "$APK" ]; then
+            echo "❌ APK tidak ditemukan di flutter-project/build/app/outputs/flutter-apk"
+            ls -la flutter-project/build/app/outputs/ 2>/dev/null || true
+            exit 1
+          fi
+
           MODE="${{ needs.detect.outputs.build_type }}"
-          [ "$MODE" = "debug" ] && MODE_CAP="Debug" || MODE_CAP="Release"
+          if [ "$MODE" = "debug" ]; then
+            MODE_CAP="Debug"
+          else
+            MODE_CAP="Release"
+          fi
+
           mkdir -p output
           cp "$APK" "output/Flutter-${MODE_CAP}.apk"
           ls -lh output/
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: app
           path: output/*.apk
