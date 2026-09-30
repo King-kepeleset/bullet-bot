@@ -42,19 +42,19 @@ jobs:
           BUILD_TYPE=$(jq -r '.build_type // "release"' build-config.json)
 
           case "$TYPE" in
-            flutter|web2apk) ;;
+            flutter|web2apk|web) ;;
             *)
               echo "❌ type build tidak valid: $TYPE"
-              echo "Gunakan: flutter atau web2apk"
+              echo "Gunakan: flutter, web2apk, atau web"
               exit 1
               ;;
           esac
 
           case "$BUILD_TYPE" in
-            debug|release) ;;
+            debug|release|web) ;;
             *)
               echo "❌ build_type tidak valid: $BUILD_TYPE"
-              echo "Gunakan: debug atau release"
+              echo "Gunakan: debug, release, atau web"
               exit 1
               ;;
           esac
@@ -64,7 +64,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════
   web2apk:
     needs: detect
-    if: needs.detect.outputs.type == 'web2apk'
+    if: needs.detect.outputs.type == 'web2apk' || needs.detect.outputs.type == 'web'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -77,24 +77,34 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@v4
         with:
-          packages: |
-            platform-tools
-            platforms;android-34
-            platforms;android-35
-            build-tools;34.0.0
-            build-tools;35.0.0
+          packages: ''
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Accept Android SDK licenses (non-interactive)
+      - name: Install Android SDK packages
         shell: bash
         run: |
-          set -e
-          yes | sdkmanager --licenses || true
-          echo "✅ All Android SDK licenses accepted."
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools"
+          # Install several current SDK levels independently. A missing optional
+          # package must not make the whole SDK setup fail.
+          for api in 34 35 36; do
+            if sdkmanager --list | grep -qE "^[[:space:]]*platforms;android-${api}[[:space:]]"; then
+              sdkmanager "platforms;android-${api}" || echo "⚠️ android-${api} tidak tersedia"
+            fi
+          done
+          for bt in 34.0.0 35.0.0 36.0.0; do
+            if sdkmanager --list | grep -qE "^[[:space:]]*build-tools;${bt//./\.}[[:space:]]"; then
+              sdkmanager "build-tools;${bt}" || echo "⚠️ build-tools ${bt} tidak tersedia"
+            fi
+          done
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "=== Installed Android SDK packages ==="
+          sdkmanager --list_installed | grep -E 'platform-tools|platforms;android-|build-tools;' || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -509,24 +519,37 @@ jobs:
 
       - name: Build Web2Apk
         working-directory: project
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           echo "=== Gradle version ==="
           gradle --version
-          echo "=== Building ==="
-          gradle assembleRelease --no-daemon --stacktrace
+          MODE="${{ needs.detect.outputs.build_type }}"
+          if [ "$MODE" = "debug" ]; then
+            gradle assembleDebug --no-daemon --stacktrace
+          else
+            gradle assembleRelease --no-daemon --stacktrace
+          fi
 
       - name: Rename APK
         shell: bash
         run: |
-          set -e
-          APK=$(find project/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          set -euo pipefail
+          MODE="${{ needs.detect.outputs.build_type }}"
+          if [ "$MODE" = "debug" ]; then
+            APK=$(find project/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+            NAME="Web2Apk-Debug.apk"
+          else
+            APK=$(find project/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+            NAME="Web2Apk-Release.apk"
+          fi
           if [ -z "$APK" ]; then
             echo "❌ APK tidak ditemukan"
+            find project/app/build/outputs -type f -name "*.apk" -print || true
             exit 1
           fi
           mkdir -p output
-          cp "$APK" output/Web2Apk-Release.apk
+          cp "$APK" "output/$NAME"
           ls -lh output/
 
       - name: Upload APK
@@ -555,24 +578,34 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@v4
         with:
-          packages: |
-            platform-tools
-            platforms;android-34
-            platforms;android-35
-            build-tools;34.0.0
-            build-tools;35.0.0
+          packages: ''
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Accept Android SDK licenses (non-interactive)
+      - name: Install Android SDK packages
         shell: bash
         run: |
-          set -e
-          yes | sdkmanager --licenses || true
-          echo "✅ All Android SDK licenses accepted."
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools"
+          # Install several current SDK levels independently. A missing optional
+          # package must not make the whole SDK setup fail.
+          for api in 34 35 36; do
+            if sdkmanager --list | grep -qE "^[[:space:]]*platforms;android-${api}[[:space:]]"; then
+              sdkmanager "platforms;android-${api}" || echo "⚠️ android-${api} tidak tersedia"
+            fi
+          done
+          for bt in 34.0.0 35.0.0 36.0.0; do
+            if sdkmanager --list | grep -qE "^[[:space:]]*build-tools;${bt//./\.}[[:space:]]"; then
+              sdkmanager "build-tools;${bt}" || echo "⚠️ build-tools ${bt} tidak tersedia"
+            fi
+          done
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "=== Installed Android SDK packages ==="
+          sdkmanager --list_installed | grep -E 'platform-tools|platforms;android-|build-tools;' || true
 
       - name: Extract + validate project ZIP
         shell: bash
@@ -816,6 +849,8 @@ jobs:
           MODE="${{ needs.detect.outputs.build_type }}"
           if [ "$MODE" = "debug" ]; then
             MODE_CAP="Debug"
+          elif [ "$MODE" = "web" ]; then
+            MODE_CAP="Web"
           else
             MODE_CAP="Release"
           fi
