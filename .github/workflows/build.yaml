@@ -34,7 +34,6 @@ jobs:
             cat build-config.json
           else
             echo "❌ build-config.json tidak ditemukan."
-            echo "Bot harus mengirim build-config.json sebelum workflow dijalankan."
             exit 1
           fi
 
@@ -43,24 +42,16 @@ jobs:
 
           case "$TYPE" in
             flutter|web2apk|web) ;;
-            *)
-              echo "❌ type build tidak valid: $TYPE"
-              echo "Gunakan: flutter, web2apk, atau web"
-              exit 1
-              ;;
+            *) echo "❌ type tidak valid: $TYPE"; exit 1 ;;
           esac
 
           case "$BUILD_TYPE" in
             debug|release|web) ;;
-            *)
-              echo "❌ build_type tidak valid: $BUILD_TYPE"
-              echo "Gunakan: debug, release, atau web"
-              exit 1
-              ;;
+            *) echo "❌ build_type tidak valid: $BUILD_TYPE"; exit 1 ;;
           esac
 
   # ═══════════════════════════════════════════════════════════
-  #  WEB2APK BUILD (Android WebView wrapper)
+  #  WEB2APK BUILD
   # ═══════════════════════════════════════════════════════════
   web2apk:
     needs: detect
@@ -95,7 +86,7 @@ jobs:
           sdkmanager "platforms;android-35" || true
           sdkmanager "build-tools;35.0.0"   || true
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          echo "=== Installed Android SDK packages ==="
+          echo "=== Installed ==="
           sdkmanager --list_installed | grep -E 'platform-tools|platforms;android-|build-tools;' || true
 
       - name: Set up Gradle
@@ -108,7 +99,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick jq
-          # Pastikan 'convert' tersedia (Ubuntu 24.04 pakai magick)
           if ! command -v convert >/dev/null 2>&1; then
             sudo ln -sf "$(command -v magick)" /usr/local/bin/convert
           fi
@@ -482,23 +472,20 @@ jobs:
           URL="${{ needs.detect.outputs.url }}"
           APP_NAME="${{ needs.detect.outputs.app_name }}"
 
-          # Escape URL & app name untuk sed
           URL_ESC=$(printf '%s\n' "$URL" | sed -e 's/[\/&|]/\\&/g')
           APP_NAME_ESC=$(printf '%s\n' "$APP_NAME" | sed -e 's/[\/&|]/\\&/g')
 
           sed -i "s|URL_PLACEHOLDER|${URL_ESC}|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
           sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${APP_NAME_ESC}</string>|g" project/app/src/main/res/values/strings.xml
 
-          # Icon validation
           if [ ! -f build-assets/icon.png ] || ! file build-assets/icon.png | grep -q "PNG image"; then
-            echo "⚠️ Icon tidak valid / tidak ada, membuat default..."
+            echo "⚠️ Icon tidak valid, membuat default..."
             mkdir -p build-assets
             convert -size 512x512 xc:'#3B4FE0' -gravity center \
               -fill white -pointsize 180 -annotate +0+0 '📱' build-assets/icon.png 2>/dev/null || \
               convert -size 512x512 xc:'#3B4FE0' build-assets/icon.png
           fi
 
-          # Generate icons
           convert build-assets/icon.png -resize 72x72   project/app/src/main/res/mipmap-hdpi/ic_launcher.png
           convert build-assets/icon.png -resize 48x48   project/app/src/main/res/mipmap-mdpi/ic_launcher.png
           convert build-assets/icon.png -resize 96x96   project/app/src/main/res/mipmap-xhdpi/ic_launcher.png
@@ -510,7 +497,6 @@ jobs:
                "project/app/src/main/res/mipmap-$d/ic_launcher_round.png"
           done
 
-          # Keystore
           keytool -genkey -v -keystore project/app/release.keystore \
             -alias release -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
@@ -521,7 +507,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== Gradle version ==="
           gradle --version
           MODE="${{ needs.detect.outputs.build_type }}"
           if [ "$MODE" = "debug" ]; then
@@ -595,7 +580,7 @@ jobs:
           sdkmanager "platforms;android-35" || true
           sdkmanager "build-tools;35.0.0"   || true
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          echo "=== Installed Android SDK packages ==="
+          echo "=== Installed ==="
           sdkmanager --list_installed | grep -E 'platform-tools|platforms;android-|build-tools;' || true
 
       - name: Extract + validate project ZIP
@@ -606,14 +591,11 @@ jobs:
           mkdir -p flutter-project
           unzip -q flutter-project.zip -d flutter-project
 
-          # Cleanup folder yang bikin build error
           find flutter-project -type d -name "build"       -prune -exec rm -rf {} + 2>/dev/null || true
           find flutter-project -type d -name ".dart_tool"  -prune -exec rm -rf {} + 2>/dev/null || true
           find flutter-project -type d -name ".git"        -prune -exec rm -rf {} + 2>/dev/null || true
           find flutter-project -type d -name ".gradle"     -prune -exec rm -rf {} + 2>/dev/null || true
 
-          # Cari pubspec.yaml. ZIP dari HP sering membungkus project
-          # dalam satu folder atau beberapa level folder.
           PUBSPEC=$(find flutter-project -type f -name pubspec.yaml -print -quit)
 
           if [ -z "$PUBSPEC" ]; then
@@ -641,41 +623,35 @@ jobs:
           echo "✅ Project structure:"
           ls -la flutter-project/
 
-      # ─────────────────────────────────────────────────────────
-      #  FIX: Patch Gradle wrapper ke versi yang didukung Flutter
-      #  Flutter stable terbaru butuh Gradle >= 8.14.0
-      # ─────────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════
+      #  PATCH GRADLE WRAPPER — TULIS ULANG LANGSUNG (NO SED!)
+      # ═══════════════════════════════════════════════════════
       - name: Patch Gradle wrapper version
         shell: bash
         run: |
           set -euo pipefail
-          GRADLE_WRAPPER="flutter-project/android/gradle/wrapper/gradle-wrapper.properties"
+          GRADLE_DIR="flutter-project/android/gradle/wrapper"
+          GRADLE_WRAPPER="$GRADLE_DIR/gradle-wrapper.properties"
 
-          if [ ! -f "$GRADLE_WRAPPER" ]; then
-            echo "❌ $GRADLE_WRAPPER tidak ditemukan — struktur project Flutter tidak lengkap."
-            find flutter-project/android -maxdepth 3 -type f 2>/dev/null | head -20 || true
-            exit 1
+          mkdir -p "$GRADLE_DIR"
+
+          if [ -f "$GRADLE_WRAPPER" ]; then
+            echo "─── Sebelum ───"
+            cat "$GRADLE_WRAPPER"
+          else
+            echo "⚠️ File wrapper belum ada, akan dibuat baru."
           fi
 
-          echo "─── Sebelum ───"
-          cat "$GRADLE_WRAPPER"
-
-          # Flutter stable terbaru butuh Gradle >= 8.14.0. Paksa ke 8.14.3.
-          sed -i -E 's|gradle-[0-9]+(\.[0-9]+)+-(all|bin)\.zip|gradle-8.14.3-\2.zip|g' "$GRADLE_WRAPPER"
-
-          # Pastikan benar-benar berubah; kalau tidak, tulis ulang manual
-          if ! grep -qE 'gradle-8\.14\.3-(all|bin)\.zip' "$GRADLE_WRAPPER"; then
-            echo "⚠️ sed tidak match, tulis ulang manual..."
-            cat > "$GRADLE_WRAPPER" <<'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip
-          networkTimeout=10000
-          validateDistributionUrl=true
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          fi
+          # Tulis ulang dari nol. Tidak pakai sed → tidak akan error.
+          cat > "$GRADLE_WRAPPER" <<'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
 
           echo "─── Sesudah ───"
           cat "$GRADLE_WRAPPER"
@@ -724,28 +700,6 @@ jobs:
             local FIXED=false
             echo "=== 🔧 Auto-fixing pubspec.yaml ==="
 
-            # ─── Fix Gradle wrapper kalau Flutter menolak versi lama ───
-            if [ -f "$BUILD_LOG" ] && grep -qE "Gradle version \([0-9.]+\) is lower than Flutter's minimum" "$BUILD_LOG"; then
-              local GW="android/gradle/wrapper/gradle-wrapper.properties"
-              if [ -f "$GW" ]; then
-                echo "🔧 Bumping Gradle wrapper ke 8.14.3 (karena diminta Flutter)..."
-                sed -i -E 's|gradle-[0-9]+(\.[0-9]+)+-(all|bin)\.zip|gradle-8.14.3-\2.zip|g' "$GW"
-                if ! grep -qE 'gradle-8\.14\.3-(all|bin)\.zip' "$GW"; then
-                  cat > "$GW" <<'EOP'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip
-          networkTimeout=10000
-          validateDistributionUrl=true
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOP
-                fi
-                FIXED=true
-              fi
-            fi
-
-            # ─── Fix SDK constraint di pubspec ───
             if [ -f "$PUB_LOG" ] && grep -q "requires SDK version\|requires Dart SDK" "$PUB_LOG"; then
               sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true
               FIXED=true
@@ -764,10 +718,6 @@ jobs:
             fi
             if [ -f "$PUB_LOG" ] && grep -q "permission_handler" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/permission_handler:.*/permission_handler: ^11.3.1/g" pubspec.yaml || true
-              FIXED=true
-            fi
-            if [ -f "$PUB_LOG" ] && grep -q "firebase_core" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
-              echo "⚠️ firebase_core terdeteksi; dependency tidak dipaksa downgrade otomatis."
               FIXED=true
             fi
             if [ -f "$PUB_LOG" ] && grep -q "file_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
@@ -813,8 +763,6 @@ jobs:
             if try_pub_get; then
               echo "✅ pub get berhasil"
 
-              # Bypass validasi dependency Flutter (Gradle/AGP) supaya tidak
-              # langsung diblok hanya karena versi dianggap kurang.
               if [ "$BUILD_MODE" = "debug" ]; then
                 BUILD_CMD="flutter build apk --debug --target-platform android-arm,android-arm64,android-x64 --android-skip-build-dependency-validation"
               else
@@ -854,7 +802,7 @@ jobs:
           set -e
           APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n 1)
           if [ -z "$APK" ]; then
-            echo "❌ APK tidak ditemukan di flutter-project/build/app/outputs/flutter-apk"
+            echo "❌ APK tidak ditemukan"
             ls -la flutter-project/build/app/outputs/ 2>/dev/null || true
             exit 1
           fi
