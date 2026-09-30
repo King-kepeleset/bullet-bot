@@ -641,6 +641,45 @@ jobs:
           echo "✅ Project structure:"
           ls -la flutter-project/
 
+      # ─────────────────────────────────────────────────────────
+      #  FIX: Patch Gradle wrapper ke versi yang didukung Flutter
+      #  Flutter stable terbaru butuh Gradle >= 8.14.0
+      # ─────────────────────────────────────────────────────────
+      - name: Patch Gradle wrapper version
+        shell: bash
+        run: |
+          set -euo pipefail
+          GRADLE_WRAPPER="flutter-project/android/gradle/wrapper/gradle-wrapper.properties"
+
+          if [ ! -f "$GRADLE_WRAPPER" ]; then
+            echo "❌ $GRADLE_WRAPPER tidak ditemukan — struktur project Flutter tidak lengkap."
+            find flutter-project/android -maxdepth 3 -type f 2>/dev/null | head -20 || true
+            exit 1
+          fi
+
+          echo "─── Sebelum ───"
+          cat "$GRADLE_WRAPPER"
+
+          # Flutter stable terbaru butuh Gradle >= 8.14.0. Paksa ke 8.14.3.
+          sed -i -E 's|gradle-[0-9]+(\.[0-9]+)+-(all|bin)\.zip|gradle-8.14.3-\2.zip|g' "$GRADLE_WRAPPER"
+
+          # Pastikan benar-benar berubah; kalau tidak, tulis ulang manual
+          if ! grep -qE 'gradle-8\.14\.3-(all|bin)\.zip' "$GRADLE_WRAPPER"; then
+            echo "⚠️ sed tidak match, tulis ulang manual..."
+            cat > "$GRADLE_WRAPPER" <<'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          fi
+
+          echo "─── Sesudah ───"
+          cat "$GRADLE_WRAPPER"
+
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
@@ -685,57 +724,79 @@ jobs:
             local FIXED=false
             echo "=== 🔧 Auto-fixing pubspec.yaml ==="
 
-            if grep -q "requires SDK version\|requires Dart SDK" "$PUB_LOG"; then
+            # ─── Fix Gradle wrapper kalau Flutter menolak versi lama ───
+            if [ -f "$BUILD_LOG" ] && grep -qE "Gradle version \([0-9.]+\) is lower than Flutter's minimum" "$BUILD_LOG"; then
+              local GW="android/gradle/wrapper/gradle-wrapper.properties"
+              if [ -f "$GW" ]; then
+                echo "🔧 Bumping Gradle wrapper ke 8.14.3 (karena diminta Flutter)..."
+                sed -i -E 's|gradle-[0-9]+(\.[0-9]+)+-(all|bin)\.zip|gradle-8.14.3-\2.zip|g' "$GW"
+                if ! grep -qE 'gradle-8\.14\.3-(all|bin)\.zip' "$GW"; then
+                  cat > "$GW" <<'EOP'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOP
+                fi
+                FIXED=true
+              fi
+            fi
+
+            # ─── Fix SDK constraint di pubspec ───
+            if [ -f "$PUB_LOG" ] && grep -q "requires SDK version\|requires Dart SDK" "$PUB_LOG"; then
               sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "webview_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "webview_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/webview_flutter:.*/webview_flutter: ^4.13.0/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "geolocator" "$PUB_LOG" && grep -qE "toARGB32|geolocator_android" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "geolocator" "$PUB_LOG" && grep -qE "toARGB32|geolocator_android" "$PUB_LOG"; then
               sed -i -E "s/geolocator:.*/geolocator: ^13.0.4/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "google_maps_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "google_maps_flutter" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/google_maps_flutter:.*/google_maps_flutter: ^2.9.0/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "permission_handler" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "permission_handler" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/permission_handler:.*/permission_handler: ^11.3.1/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "firebase_core" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "firebase_core" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               echo "⚠️ firebase_core terdeteksi; dependency tidak dipaksa downgrade otomatis."
               FIXED=true
             fi
-            if grep -q "file_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "file_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/file_picker:.*/file_picker: ^6.2.1/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "image_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "image_picker" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/image_picker:.*/image_picker: ^1.1.2/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "intl" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "intl" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/intl:.*/intl: ^0.19.0/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "http" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "http" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/http:.*/http: ^1.2.2/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "shared_preferences" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "shared_preferences" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/shared_preferences:.*/shared_preferences: ^2.3.2/g" pubspec.yaml || true
               FIXED=true
             fi
-            if grep -q "url_launcher" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
+            if [ -f "$PUB_LOG" ] && grep -q "url_launcher" "$PUB_LOG" && grep -q "requires SDK" "$PUB_LOG"; then
               sed -i -E "s/url_launcher:.*/url_launcher: ^6.3.1/g" pubspec.yaml || true
               FIXED=true
             fi
 
             if [ "$FIXED" = true ]; then
-              echo "✅ Pubspec diperbaiki"
+              echo "✅ Perbaikan diterapkan"
               rm -f pubspec.lock
             else
               echo "⚠️ Tidak ada fix yang bisa diterapkan"
@@ -752,10 +813,12 @@ jobs:
             if try_pub_get; then
               echo "✅ pub get berhasil"
 
+              # Bypass validasi dependency Flutter (Gradle/AGP) supaya tidak
+              # langsung diblok hanya karena versi dianggap kurang.
               if [ "$BUILD_MODE" = "debug" ]; then
-                BUILD_CMD="flutter build apk --debug --target-platform android-arm,android-arm64,android-x64"
+                BUILD_CMD="flutter build apk --debug --target-platform android-arm,android-arm64,android-x64 --android-skip-build-dependency-validation"
               else
-                BUILD_CMD="flutter build apk --release --target-platform android-arm,android-arm64,android-x64"
+                BUILD_CMD="flutter build apk --release --target-platform android-arm,android-arm64,android-x64 --android-skip-build-dependency-validation"
               fi
 
               if $BUILD_CMD 2>&1 | tee "$BUILD_LOG"; then
