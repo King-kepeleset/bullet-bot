@@ -89,19 +89,11 @@ jobs:
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools"
-          # Install several current SDK levels independently. A missing optional
-          # package must not make the whole SDK setup fail.
-          for api in 34 35 36; do
-            if sdkmanager --list | grep -qE "^[[:space:]]*platforms;android-${api}[[:space:]]"; then
-              sdkmanager "platforms;android-${api}" || echo "⚠️ android-${api} tidak tersedia"
-            fi
-          done
-          for bt in 34.0.0 35.0.0 36.0.0; do
-            if sdkmanager --list | grep -qE "^[[:space:]]*build-tools;${bt//./\.}[[:space:]]"; then
-              sdkmanager "build-tools;${bt}" || echo "⚠️ build-tools ${bt} tidak tersedia"
-            fi
-          done
+          sdkmanager "platform-tools" || true
+          sdkmanager "platforms;android-34" || echo "⚠️ android-34 gagal"
+          sdkmanager "build-tools;34.0.0"   || echo "⚠️ build-tools 34 gagal"
+          sdkmanager "platforms;android-35" || true
+          sdkmanager "build-tools;35.0.0"   || true
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           echo "=== Installed Android SDK packages ==="
           sdkmanager --list_installed | grep -E 'platform-tools|platforms;android-|build-tools;' || true
@@ -109,11 +101,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.10.2'
           cache-read-only: false
 
       - name: Install tools (ImageMagick, jq)
-        run: sudo apt-get update && sudo apt-get install -y imagemagick jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick jq
+          # Pastikan 'convert' tersedia (Ubuntu 24.04 pakai magick)
+          if ! command -v convert >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v magick)" /usr/local/bin/convert
+          fi
+          convert --version | head -n 1
 
       - name: Create project structure
         run: |
@@ -590,19 +589,11 @@ jobs:
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools"
-          # Install several current SDK levels independently. A missing optional
-          # package must not make the whole SDK setup fail.
-          for api in 34 35 36; do
-            if sdkmanager --list | grep -qE "^[[:space:]]*platforms;android-${api}[[:space:]]"; then
-              sdkmanager "platforms;android-${api}" || echo "⚠️ android-${api} tidak tersedia"
-            fi
-          done
-          for bt in 34.0.0 35.0.0 36.0.0; do
-            if sdkmanager --list | grep -qE "^[[:space:]]*build-tools;${bt//./\.}[[:space:]]"; then
-              sdkmanager "build-tools;${bt}" || echo "⚠️ build-tools ${bt} tidak tersedia"
-            fi
-          done
+          sdkmanager "platform-tools" || true
+          sdkmanager "platforms;android-34" || echo "⚠️ android-34 gagal"
+          sdkmanager "build-tools;34.0.0"   || echo "⚠️ build-tools 34 gagal"
+          sdkmanager "platforms;android-35" || true
+          sdkmanager "build-tools;35.0.0"   || true
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           echo "=== Installed Android SDK packages ==="
           sdkmanager --list_installed | grep -E 'platform-tools|platforms;android-|build-tools;' || true
@@ -650,50 +641,9 @@ jobs:
           echo "✅ Project structure:"
           ls -la flutter-project/
 
-      - name: Detect Flutter version
-        id: flutter_detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          PUBSPEC="flutter-project/pubspec.yaml"
-
-          SDK_CONSTRAINT=$(awk '
-            /^environment:/ { in_env=1; next }
-            in_env && /^[[:space:]]+sdk:/ {
-              sub(/^[[:space:]]*sdk:[[:space:]]*/, "");
-              gsub(/["'"'"']/, "");
-              print;
-              exit
-            }
-          ' "$PUBSPEC" || true)
-
-          echo "Detected Dart SDK constraint: ${SDK_CONSTRAINT:-unknown}"
-
-          # Default yang konservatif. Jika constraint membutuhkan Dart yang lebih baru,
-          # gunakan Flutter stable yang menyediakan Dart tersebut.
-          FLUTTER_VERSION="3.27.0"
-
-          if echo "$SDK_CONSTRAINT" | grep -Eq '3\.(8|9|10|11|12|13|14|15)'; then
-            FLUTTER_VERSION="3.35.2"
-          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.7'; then
-            FLUTTER_VERSION="3.29.0"
-          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.6'; then
-            FLUTTER_VERSION="3.27.0"
-          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.5'; then
-            FLUTTER_VERSION="3.24.0"
-          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.4'; then
-            FLUTTER_VERSION="3.22.0"
-          elif echo "$SDK_CONSTRAINT" | grep -Eq '3\.3'; then
-            FLUTTER_VERSION="3.19.0"
-          fi
-
-          echo "FLUTTER_VERSION=$FLUTTER_VERSION" >> "$GITHUB_ENV"
-          echo "Using Flutter $FLUTTER_VERSION"
-
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
