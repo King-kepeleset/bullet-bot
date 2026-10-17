@@ -93,23 +93,23 @@
 
 ### 📥 **Download Script yang Sudah Teruji 100% Berhasil**
 
-<a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/build.yml/file">
-  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_build.yml-MEDIAFIRE-0052CC?style=for-the-badge&logo=mediafire&logoColor=white&labelColor=0a0a0a" height="50" />
+<a href="https://www.mediafire.com/file/l039pp7m29ni019/MyScriptBuild.zip/file">
+  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_SC.zip-MEDIAFIRE-0052CC?style=for-the-badge&logo=mediafire&logoColor=white&labelColor=0a0a0a" height="50" />
 </a>
 
 <br/>
 
-<a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/README.md/file">
+<a href="https://www.mediafire.com/file/def456uvw/README.md/file">
   <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_README.md-MEDIAFIRE-0052CC?style=for-the-badge&logo=mediafire&logoColor=white&labelColor=0a0a0a" height="45" />
 </a>
 
-<a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/LICENSE/file">
+<a href="https://www.mediafire.com/file/wj9k73vo5zrp6gy/LISENCES/file">
   <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_LICENSE-MEDIAFIRE-0052CC?style=for-the-badge&logo=mediafire&logoColor=white&labelColor=0a0a0a" height="45" />
 </a>
 
 </div>
 
-> ⚠️ **Konfigurasi MediaFire Link** — Ganti `XXXXXXXXXXXXXX` di atas dengan ID file MediaFire kamu masing-masing. Contoh: `https://www.mediafire.com/file/abc123xyz/build.yml/file`
+<br/>
 
 <table align="center">
 <tr>
@@ -119,27 +119,27 @@
 </tr>
 <tr>
 <td align="center"><code>build.yml</code></td>
-<td align="center"><a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/build.yml/file">Download</a></td>
+<td align="center"><a href="https://www.mediafire.com/file/1f9su5d79fkdub2/build.yml/file">Download</a></td>
 <td align="center">Workflow utama GitHub Actions</td>
 </tr>
 <tr>
 <td align="center"><code>README.md</code></td>
-<td align="center"><a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/README.md/file">Download</a></td>
+<td align="center"><a href="https://www.mediafire.com/file/def456uvw/README.md/file">Download</a></td>
 <td align="center">Dokumentasi lengkap</td>
 </tr>
 <tr>
 <td align="center"><code>LICENSE</code></td>
-<td align="center"><a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/LICENSE/file">Download</a></td>
+<td align="center"><a href="https://www.mediafire.com/file/wj9k73vo5zrp6gy/LISENCES/file">Download</a></td>
 <td align="center">Lisensi cwooloXD</td>
 </tr>
 <tr>
 <td align="center"><code>build-config.json</code></td>
-<td align="center"><a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/build-config.json/file">Download</a></td>
+<td align="center"><a href="https://www.mediafire.com/file/jkl012mno/build-config.json/file">Download</a></td>
 <td align="center">Template konfigurasi build</td>
 </tr>
 <tr>
 <td align="center"><code>icon.png</code></td>
-<td align="center"><a href="https://www.mediafire.com/file/XXXXXXXXXXXXXX/icon.png/file">Download</a></td>
+<td align="center"><a href="https://www.mediafire.com/file/dfjfllgwyytxlwr/Thumbnail+(2).jpg/file">Download</a></td>
 <td align="center">Template icon aplikasi</td>
 </tr>
 </table>
@@ -246,5 +246,3 @@ Build project Android existing
 <div align="center">
   <img src="https://user-images.githubusercontent.com/74038190/212284158-e840e285-664b-44d7-b79b-e264b5e54825.gif" width="400" />
 </div>
-
-### 1️⃣ Cara Manual (UI) — Recommended
